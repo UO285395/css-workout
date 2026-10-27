@@ -44,6 +44,7 @@ export const UI_CSS = `
 .row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .muted { color: #6e6e73; }
 .warn { color: #b45309; background: #fef3c7; border-radius: 6px; padding: 6px 8px; }
+.hint-box { color: #1e40af; background: #eff6ff; border-radius: 6px; padding: 6px 8px; }
 .empty { color: #6e6e73; font-style: italic; }
 code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
 

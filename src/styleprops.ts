@@ -16,6 +16,8 @@ const LABELS: Record<string, string> = {
   'justify-content': 'Reparto',
   'align-items': 'Alineación de los hijos',
   gap: 'Separación entre hijos',
+  'align-self': 'Posición en el contenedor',
+  'justify-self': 'Posición en el contenedor',
 };
 
 export const styleLabel = (prop: string): string | undefined => LABELS[prop];

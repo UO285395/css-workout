@@ -101,3 +101,61 @@ test('el modo «Usar página» deja usar el prototipo', async ({ page }) => {
   await page.locator('.btn').click();
   await expect(ui(page, '.panel')).toContainText('Pulsa «Editar»');
 });
+
+test('pestaña Texto: tamaño arrastrando la etiqueta, grosor, alineación y color', async ({ page }) => {
+  const h1 = page.locator('.hero h1');
+  await h1.click();
+  await ui(page, 'button[data-act="mode-text"]').click();
+
+  await dragBy(page, ui(page, '[data-scrub="font-size"]'), 20, 0);
+  expect(await style(h1, 'font-size')).toBe('50px');
+
+  await ui(page, 'select[data-prop="font-weight"]').selectOption('400');
+  expect(await style(h1, 'font-weight')).toBe('400');
+
+  await ui(page, 'button[data-prop="text-align"][data-value="right"]').click();
+  expect(await style(h1, 'text-align')).toBe('right');
+
+  await ui(page, 'input[type="color"][data-prop="color"]').fill('#ff0000');
+  expect(await style(h1, 'color')).toBe('rgb(255, 0, 0)');
+
+  await ui(page, 'details summary').click();
+  const css = await ui(page, 'textarea').inputValue();
+  expect(css).toContain('font-size: 50px; /* antes: 40px */');
+  expect(css).toContain('font-weight: 400; /* antes: 700 */');
+  expect(css).toContain('text-align: right;');
+  expect(css).toContain('color: #ff0000; /* antes: #222222 */');
+
+  await page.keyboard.press('Control+z');
+  expect(await style(h1, 'color')).toBe('rgb(34, 34, 34)');
+});
+
+test('pestaña Alineación: colocar en fila, centrar y separar', async ({ page }) => {
+  const hero = page.locator('.hero');
+  await hero.click({ position: { x: 10, y: 10 } });
+  await ui(page, 'button[data-act="mode-layout"]').click();
+  await ui(page, 'button[data-act="children"][data-value="row"]').click();
+  expect(await style(hero, 'display')).toBe('flex');
+  expect(await style(hero, 'flex-direction')).toBe('row');
+
+  await ui(page, 'button[data-prop="justify-content"][data-value="center"]').click();
+  expect(await style(hero, 'justify-content')).toBe('center');
+
+  const gap = ui(page, 'input[data-prop="gap"]');
+  await gap.fill('16');
+  await gap.press('Enter');
+  expect(await style(hero, 'column-gap')).toBe('16px');
+  await gap.blur();
+
+  // Tres pasos: separación, centrado y, de una vez, display y dirección.
+  await page.keyboard.press('Control+z');
+  await page.keyboard.press('Control+z');
+  await page.keyboard.press('Control+z');
+  expect(await style(hero, 'display')).toBe('block');
+});
+
+test('pestaña Alineación en un elemento sin hijos sugiere subir al contenedor', async ({ page }) => {
+  await page.locator('.btn').click();
+  await ui(page, 'button[data-act="mode-layout"]').click();
+  await expect(ui(page, '.panel')).toContainText('«↑ Padre»');
+});

@@ -30,7 +30,7 @@ export const UI_CSS = `
 .size.wh { cursor: nwse-resize; width: 12px; height: 12px; }
 
 .dims { position: fixed; background: #3b82f6; color: #fff; padding: 1px 6px; border-radius: 3px; font-size: 11px; white-space: nowrap; }
-.tip { position: fixed; background: #1d1d1f; color: #fff; padding: 4px 8px; border-radius: 4px; font-size: 12px; white-space: nowrap; }
+.tip { position: fixed; z-index: 2; background: #1d1d1f; color: #fff; padding: 4px 8px; border-radius: 4px; font-size: 12px; white-space: nowrap; }
 .tip .snap { color: #9be38a; }
 
 .panel { position: fixed; z-index: 1; right: 16px; bottom: 16px; width: 320px; max-height: calc(100vh - 32px); overflow: auto;
@@ -57,6 +57,20 @@ button.icon { padding: 2px 6px; }
 .toggle button { border: 0; border-radius: 0; }
 .toggle button.on { background: #3b82f6; color: #fff; }
 
+.tabs { display: flex; }
+.tabs button { flex: 1; padding: 4px 2px; }
+.toggle.changed { border-color: #3b82f6; }
+.form { display: grid; grid-template-columns: 112px 1fr; gap: 6px 8px; align-items: center; }
+.scrub { cursor: ew-resize; user-select: none; border-bottom: 1px dashed #9a9aa0; justify-self: start; }
+.scrub:hover { color: #3b82f6; border-color: #3b82f6; }
+.unit { position: relative; display: block; }
+.unit i { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); font-style: normal; color: #9a9aa0; font-size: 11px; pointer-events: none; }
+.unit input { padding-right: 22px; }
+select { width: 100%; font: inherit; padding: 2px 4px; border: 1px solid #d2d2d7; border-radius: 4px; background: #fff; color: inherit; }
+select.changed { border-color: #3b82f6; background: #eff6ff; }
+input[type=color] { width: 32px; height: 22px; padding: 0; border: 1px solid #d2d2d7; border-radius: 4px; background: none; cursor: pointer; }
+input[type=color].changed { border-color: #3b82f6; }
+.lbl { width: 66px; }
 .grid { display: grid; grid-template-columns: 62px repeat(4, 1fr); gap: 4px; align-items: center; }
 .grid .h { text-align: center; color: #6e6e73; font-size: 11px; }
 input[type=number] { width: 100%; font: inherit; padding: 2px 4px; border: 1px solid #d2d2d7; border-radius: 4px; }

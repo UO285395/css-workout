@@ -159,3 +159,42 @@ test('pestaña Alineación en un elemento sin hijos sugiere subir al contenedor'
   await ui(page, 'button[data-act="mode-layout"]').click();
   await expect(ui(page, '.panel')).toContainText('«↑ Padre»');
 });
+
+test('al pulsar una opción se marca como activa', async ({ page }) => {
+  await page.locator('.hero h1').click();
+  await ui(page, 'button[data-act="mode-text"]').click();
+  await ui(page, 'button[data-prop="text-decoration-line"][data-value="underline"]').click();
+  await expect(ui(page, 'button[data-prop="text-decoration-line"].on')).toHaveText('Subrayado');
+  await ui(page, 'button[data-prop="text-decoration-line"][data-value="none"]').click();
+  await expect(ui(page, 'button[data-prop="text-decoration-line"].on')).toHaveText('Sin subrayar');
+});
+
+test('alinear un contenedor que ya es flex mueve a sus hijos y marca la opción', async ({ page }) => {
+  await page.locator('.nav').click({ position: { x: 600, y: 5 } });
+  await ui(page, 'button[data-act="mode-layout"]').click();
+  const logo = page.locator('.logo');
+  const x0 = (await logo.boundingBox())!.x;
+  await ui(page, 'button[data-prop="justify-content"][data-value="center"]').click();
+  expect((await logo.boundingBox())!.x).toBeGreaterThan(x0 + 100);
+  await expect(ui(page, 'button[data-prop="justify-content"].on')).toHaveText('Centro');
+});
+
+test('avisa cuando no hay espacio libre para alinear', async ({ page }) => {
+  await page.locator('.card').first().click({ position: { x: 6, y: 6 } });
+  await ui(page, 'button[data-act="mode-layout"]').click();
+  await ui(page, 'button[data-act="children"][data-value="column"]').click();
+  await expect(ui(page, '.hint')).toHaveText(/^Sin espacio libre en vertical/);
+});
+
+test('alinear texto: funciona en un bloque y avisa si el elemento mide lo mismo que su texto', async ({ page }) => {
+  const h2 = page.locator('.card h2').first();
+  await h2.click();
+  await ui(page, 'button[data-act="mode-text"]').click();
+  await expect(ui(page, '[data-hint="text-align"]')).toHaveCount(0);
+  await ui(page, 'button[data-prop="text-align"][data-value="right"]').click();
+  expect(await style(h2, 'text-align')).toBe('right');
+  await expect(ui(page, 'button[data-prop="text-align"].on')).toHaveText('Derecha');
+
+  await page.locator('.btn').click();
+  await expect(ui(page, '[data-hint="text-align"]')).toBeVisible();
+});

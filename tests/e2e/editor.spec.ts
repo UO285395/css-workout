@@ -185,3 +185,16 @@ test('avisa cuando no hay espacio libre para alinear', async ({ page }) => {
   await ui(page, 'button[data-act="children"][data-value="column"]').click();
   await expect(ui(page, '.hint')).toHaveText(/^Sin espacio libre en vertical/);
 });
+
+test('alinear texto: funciona en un bloque y avisa si el elemento mide lo mismo que su texto', async ({ page }) => {
+  const h2 = page.locator('.card h2').first();
+  await h2.click();
+  await ui(page, 'button[data-act="mode-text"]').click();
+  await expect(ui(page, '[data-hint="text-align"]')).toHaveCount(0);
+  await ui(page, 'button[data-prop="text-align"][data-value="right"]').click();
+  expect(await style(h2, 'text-align')).toBe('right');
+  await expect(ui(page, 'button[data-prop="text-align"].on')).toHaveText('Derecha');
+
+  await page.locator('.btn').click();
+  await expect(ui(page, '[data-hint="text-align"]')).toBeVisible();
+});

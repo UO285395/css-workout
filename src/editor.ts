@@ -92,6 +92,18 @@ function freeSpace(el: Element, cs: CSSStyleDeclaration): { horizontal: number; 
   };
 }
 
+/** true si el texto ya ocupa todo el ancho disponible: entonces text-align no tiene efecto visible. */
+function textFitsBox(el: Element, cs: CSSStyleDeclaration): boolean {
+  if (cs.display === 'inline') return true;
+  const px = (v: string) => parseFloat(v) || 0;
+  const content = el.getBoundingClientRect().width - px(cs.paddingLeft) - px(cs.paddingRight)
+    - px(cs.borderLeftWidth) - px(cs.borderRightWidth);
+  const range = el.ownerDocument.createRange();
+  range.selectNodeContents(el);
+  const text = range.getBoundingClientRect().width;
+  return text > 0 && content - text < 1;
+}
+
 export class Editor {
   readonly store = new ChangeStore();
 
@@ -717,6 +729,7 @@ export class Editor {
       <div class="row"><span class="muted">Alinear texto</span>
         ${this.choice('text-align', readValue(cs, 'text-align'), [['left', 'Izquierda'], ['center', 'Centro'], ['right', 'Derecha'], ['justify', 'Justificado']])}
       </div>
+      ${textFitsBox(el, cs) ? `<div class="warn" data-hint="text-align">Este elemento mide lo mismo que su texto, así que alinear el texto no lo mueve. Para colocarlo en otro sitio, pulsa «↑ Padre» y usa la pestaña Alineación, o dale más ancho en Tamaño.</div>` : ''}
       <div class="row">
         ${this.choice('font-style', cs.fontStyle === 'italic' ? 'italic' : 'normal', [['normal', 'Normal'], ['italic', '<i>Cursiva</i>']])}
         ${this.choice('text-decoration-line', cs.textDecorationLine.includes('underline') ? 'underline' : 'none', [['none', 'Sin subrayar'], ['underline', '<u>Subrayado</u>']])}

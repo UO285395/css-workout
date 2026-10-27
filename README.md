@@ -8,9 +8,13 @@ Pensado para gente que entiende qué es un margen o un relleno pero no escribe C
 
 1. Carga el script en el prototipo (ver abajo). Aparece un panel abajo a la derecha.
 2. Haz clic en cualquier elemento para seleccionarlo. «↑ Padre» sube al contenedor.
-3. **Espaciado:** arrastra las zonas naranjas (margen) y verdes (relleno) de cada lado.
-   **Tamaño:** arrastra los tiradores azules del borde derecho, inferior o la esquina.
-   También puedes escribir los valores en el panel.
+3. Elige una pestaña:
+   - **Espaciado:** arrastra las zonas naranjas (margen) y verdes (relleno) de cada lado.
+   - **Tamaño:** arrastra los tiradores azules del borde derecho, inferior o la esquina.
+   - **Texto:** tamaño de letra, grosor, fuente, interlineado, espacio entre letras, color del texto y del fondo, alineación, cursiva, subrayado y mayúsculas.
+   - **Alineación:** coloca los elementos de dentro uno debajo de otro, en fila o en columna; repártelos y alinéalos en horizontal y vertical, y ajusta la separación entre ellos.
+
+   Los valores numéricos se pueden escribir o ajustar arrastrando a izquierda o derecha sobre su nombre.
 4. Elige si el cambio se aplica a **todos los elementos con esa clase** o **solo a ese**.
 5. Pulsa **Copiar CSS** y pégalo al final de la hoja de estilos del prototipo.
 
@@ -65,12 +69,14 @@ npm run test:e2e     # pruebas en navegador (Playwright) sobre la demo
 | `src/editor.ts` | Selección, capa de tiradores, arrastre y panel |
 | `src/box.ts` | Medidas de la caja (margen, relleno, borde) de un elemento |
 | `src/snapping.ts` | Imán a los espaciados de la página |
+| `src/styleprops.ts` | Propiedades de texto y alineación: etiquetas, lectura de valores, fuentes y tamaños de la página |
 | `src/changes.ts` | Cambios, deshacer/rehacer y generación del CSS |
 | `src/selector.ts` | Selectores por clase o únicos para un elemento |
 | `src/styles.ts` | Estilos del panel (dentro de un Shadow DOM) |
 
 ## Límites conocidos
 
-- Solo margen, relleno, ancho y alto en píxeles.
+- Los valores numéricos se generan en píxeles.
+- En contenedores con cuadrícula (`grid`) solo se ajusta la separación.
 - Los cambios no se aplican dentro de iframes ni de Shadow DOM del prototipo.
 - En elementos en línea (`display: inline`, como un `span` o un enlace suelto) el ancho, el alto y los márgenes verticales no tienen efecto. Al cambiarlos, el editor añade `display: inline-block` en el mismo paso de deshacer y lo incluye en el CSS copiado.

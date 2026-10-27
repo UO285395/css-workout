@@ -1,0 +1,102 @@
+/** Propiedades de texto y alineación: etiquetas, lectura de valores y controles del panel. */
+
+const LABELS: Record<string, string> = {
+  'font-size': 'Tamaño de letra',
+  'font-weight': 'Grosor',
+  'font-family': 'Fuente',
+  'font-style': 'Cursiva',
+  'line-height': 'Interlineado',
+  'letter-spacing': 'Espacio entre letras',
+  'text-align': 'Alineación del texto',
+  'text-decoration-line': 'Subrayado',
+  'text-transform': 'Mayúsculas',
+  color: 'Color del texto',
+  'background-color': 'Color de fondo',
+  'flex-direction': 'Dirección',
+  'justify-content': 'Reparto',
+  'align-items': 'Alineación de los hijos',
+  gap: 'Separación entre hijos',
+};
+
+export const styleLabel = (prop: string): string | undefined => LABELS[prop];
+
+export const WEIGHTS: readonly [string, string][] = [
+  ['100', 'Muy fina'], ['200', 'Extrafina'], ['300', 'Fina'], ['400', 'Normal'], ['500', 'Media'],
+  ['600', 'Seminegrita'], ['700', 'Negrita'], ['800', 'Extranegrita'], ['900', 'Muy negrita'],
+];
+
+const GENERIC_FONTS = ['system-ui, sans-serif', 'Georgia, serif', 'ui-monospace, monospace'];
+
+/** Propiedades numéricas en píxeles que se pueden arrastrar desde su etiqueta. */
+export const NUMERIC: Record<string, { min: number }> = {
+  'font-size': { min: 1 },
+  'line-height': { min: 0 },
+  'letter-spacing': { min: -20 },
+  gap: { min: 0 },
+};
+
+export const isFlex = (display: string) => display === 'flex' || display === 'inline-flex';
+export const isGrid = (display: string) => display === 'grid' || display === 'inline-grid';
+
+export function rgbToHex(rgb: string): string {
+  const m = rgb.match(/rgba?\(\s*(\d+)[\s,]+(\d+)[\s,]+(\d+)/);
+  if (!m) return rgb.startsWith('#') ? rgb : '#000000';
+  return '#' + m.slice(1, 4).map((n) => Number(n).toString(16).padStart(2, '0')).join('');
+}
+
+export const isTransparent = (color: string) => color === 'transparent' || /rgba\(.*,\s*0\s*\)$/.test(color);
+
+/** Valor actual de una propiedad tal como se muestra en el panel. */
+export function readValue(cs: CSSStyleDeclaration, prop: string): string {
+  const v = cs.getPropertyValue(prop === 'gap' ? 'column-gap' : prop).trim();
+  switch (prop) {
+    case 'font-size': return String(Math.round(parseFloat(v)));
+    case 'line-height':
+      // "normal" depende de la fuente: se muestra vacío y el valor aproximado como pista.
+      return v === 'normal' ? '' : String(Math.round(parseFloat(v)));
+    case 'letter-spacing': return v === 'normal' ? '0' : String(Math.round(parseFloat(v) * 10) / 10);
+    case 'gap': return v === 'normal' ? '0' : String(Math.round(parseFloat(v)));
+    case 'color':
+    case 'background-color': return rgbToHex(v);
+    case 'text-align': return v === 'start' ? 'left' : v === 'end' ? 'right' : v;
+    default: return v;
+  }
+}
+
+/** Valor real de la página para el comentario "antes:" del CSS exportado. */
+export function originalValue(cs: CSSStyleDeclaration, prop: string): string {
+  if (prop === 'gap') return cs.getPropertyValue('column-gap');
+  const v = cs.getPropertyValue(prop);
+  return prop === 'color' || prop === 'background-color' ? (isTransparent(v) ? 'transparent' : rgbToHex(v)) : v;
+}
+
+/** Fuentes que ya usa la página más unas genéricas, para el desplegable. */
+export function collectFonts(root: ParentNode, ignore?: (el: Element) => boolean): string[] {
+  const fonts = new Set<string>();
+  for (const el of Array.from(root.querySelectorAll('*'))) {
+    if (ignore?.(el)) continue;
+    fonts.add(getComputedStyle(el).fontFamily);
+    if (fonts.size >= 12) break;
+  }
+  for (const f of GENERIC_FONTS) fonts.add(f);
+  return Array.from(fonts).filter(Boolean);
+}
+
+/** Tamaños de letra que ya usa la página: hacen de imán al ajustar el tamaño. */
+export function collectFontSizes(root: ParentNode, ignore?: (el: Element) => boolean): number[] {
+  const sizes = new Set<number>();
+  for (const el of Array.from(root.querySelectorAll('*'))) {
+    if (ignore?.(el)) continue;
+    sizes.add(Math.round(parseFloat(getComputedStyle(el).fontSize)));
+  }
+  return Array.from(sizes).filter((n) => n > 0).sort((a, b) => a - b);
+}
+
+/**
+ * Traduce "horizontal" y "vertical" (lo que entiende cualquiera) a justify-content o align-items
+ * según la dirección del contenedor.
+ */
+export function axisProp(direction: string, axis: 'horizontal' | 'vertical'): 'justify-content' | 'align-items' {
+  const row = !direction.startsWith('column');
+  return (axis === 'horizontal') === row ? 'justify-content' : 'align-items';
+}

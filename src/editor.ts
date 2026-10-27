@@ -3,8 +3,12 @@ import { measure, zoneRect, dragSign, SIDES, type BoxModel, type Rect, type Side
 import { collectSpacingValues, snap } from './snapping';
 import { selectorFor, defaultScope, classSelector, describe, type Scope } from './selector';
 import { UI_CSS } from './styles';
+import {
+  styleLabel, readValue, originalValue, collectFonts, collectFontSizes, axisProp, isFlex, isGrid,
+  isTransparent, NUMERIC, WEIGHTS,
+} from './styleprops';
 
-type Mode = 'spacing' | 'size';
+type Mode = 'spacing' | 'size' | 'text' | 'layout';
 type Kind = 'margin' | 'padding';
 
 const HIT_MIN = 8;
@@ -22,6 +26,8 @@ export function propLabel(prop: string): string {
   if (prop === 'width') return 'Ancho';
   if (prop === 'height') return 'Alto';
   if (prop === 'display') return 'Tipo de caja';
+  const label = styleLabel(prop);
+  if (label) return label;
   const [kind, side] = prop.split('-') as [Kind, Side];
   return KIND_LABEL[kind] && SIDE_LABEL[side] ? `${KIND_LABEL[kind]} ${SIDE_LABEL[side]}` : prop;
 }
@@ -71,6 +77,10 @@ export class Editor {
   private hovered: Element | null = null;
   private selected: Element | null = null;
   private candidates: number[] = [];
+  private fontSizes: number[] = [];
+  private fonts: string[] = [];
+  /** Valor previo de un color mientras se elige en el selector, para apuntarlo como un solo paso. */
+  private colorBefore = new Map<string, Entry | null>();
   private drag: Drag | null = null;
   private frame = 0;
   private cssOpen = false;
@@ -112,7 +122,7 @@ export class Editor {
     doc.addEventListener('mousemove', this.onMouseMove, true);
     doc.addEventListener('click', this.onClick, true);
     doc.addEventListener('keydown', this.onKeyDown, true);
-    this.candidates = this.collect();
+    this.collectAll();
     this.renderPanel();
     this.loop();
   }
@@ -136,7 +146,7 @@ export class Editor {
   select(el: Element | null): void {
     this.selected = el;
     if (el) this.scope = defaultScope(el);
-    this.candidates = this.collect();
+    this.collectAll();
     this.renderPanel();
   }
 
@@ -215,13 +225,14 @@ export class Editor {
     ov.dims.style.top = `${box.border.y + box.border.h + box.margin.bottom + 4}px`;
 
     const spacing = this.mode === 'spacing';
+    const sizing = this.mode === 'size';
     for (const kind of ['margin', 'padding'] as Kind[]) {
       for (const side of SIDES) {
-        place(ov.areas[kind][side], zoneRect(box, kind, side));
+        place(ov.areas[kind][side], spacing || sizing ? zoneRect(box, kind, side) : null);
         place(ov.zones[kind][side], spacing ? zoneRect(box, kind, side, HIT_MIN) : null);
       }
     }
-    this.placeSizeHandles(spacing ? null : box);
+    this.placeSizeHandles(sizing ? box : null);
     this.renderTwins(el);
   }
 
@@ -383,8 +394,12 @@ export class Editor {
     return !!el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName));
   }
 
-  private collect(): number[] {
-    return collectSpacingValues(this.doc.body ?? this.doc.documentElement, (el) => el === this.host);
+  private collectAll(): void {
+    const root = this.doc.body ?? this.doc.documentElement;
+    const ignore = (el: Element) => el === this.host;
+    this.candidates = collectSpacingValues(root, ignore);
+    this.fontSizes = collectFontSizes(root, ignore);
+    this.fonts = collectFonts(root, ignore);
   }
 
   // ---------- Persistencia (por URL, en este navegador) ----------
@@ -419,6 +434,14 @@ export class Editor {
       </div>`;
     this.panel.addEventListener('click', (e) => this.onPanelClick(e));
     this.panel.addEventListener('change', (e) => this.onPanelChange(e));
+    this.panel.addEventListener('input', (e) => {
+      const t = e.target as HTMLInputElement;
+      if (t.type === 'color' && t.dataset.prop) this.previewColor(t.dataset.prop, t.value);
+    });
+    this.panel.addEventListener('pointerdown', (e) => {
+      const label = (e.target as Element).closest('[data-scrub]') as HTMLElement | null;
+      if (label) this.startScrub(e, label.dataset.scrub!);
+    });
     this.panel.addEventListener('toggle', (e) => {
       if (e.target instanceof HTMLDetailsElement) this.cssOpen = e.target.open;
     }, true);
@@ -441,6 +464,10 @@ export class Editor {
       case 'deselect': this.select(null); break;
       case 'mode-spacing': this.mode = 'spacing'; break;
       case 'mode-size': this.mode = 'size'; break;
+      case 'mode-text': this.mode = 'text'; break;
+      case 'mode-layout': this.mode = 'layout'; break;
+      case 'set': this.commit(btn.dataset.prop!, btn.dataset.value!); break;
+      case 'children': this.setChildren(btn.dataset.value!); break;
       case 'scope-class': this.scope = 'class'; break;
       case 'scope-element': this.scope = 'element'; break;
       case 'undo': this.store.undo(); break;
@@ -455,17 +482,77 @@ export class Editor {
   }
 
   private onPanelChange(e: Event): void {
-    const input = e.target as HTMLInputElement;
+    const input = e.target as HTMLInputElement | HTMLSelectElement;
     const prop = input.dataset.prop;
     if (!prop || !this.selected) return;
-    const v = Math.max(0, Math.round(Number(input.value)));
+    if (input instanceof HTMLSelectElement) return this.commit(prop, input.value);
+    if (input.type === 'color') return this.finishColor(prop);
+    if (input.value.trim() === '') return;
+    const min = NUMERIC[prop]?.min ?? 0;
+    const step = prop === 'letter-spacing' ? 10 : 1;
+    const v = Math.max(min, Math.round(Number(input.value) * step) / step);
     if (!Number.isFinite(v)) return;
+    this.commit(prop, `${v}px`);
+  }
+
+  /** Aplica un valor a la selección como un paso de deshacer. */
+  private commit(prop: string, value: string): void {
+    if (!this.selected) return;
     const selector = this.selector!;
     const cs = getComputedStyle(this.selected);
-    const original = this.store.get(selector, prop)?.original ?? cs.getPropertyValue(prop);
-    const items = [{ prop, value: `${v}px`, original }];
+    const original = this.store.get(selector, prop)?.original ?? originalValue(cs, prop);
+    const items = [{ prop, value, original }];
     if (needsInlineBlock(cs.display, [prop])) items.unshift({ prop: 'display', value: 'inline-block', original: 'inline' });
     this.store.setMany(selector, items);
+  }
+
+  /** «Colocar hijos»: normal, en fila o en columna (flexbox). */
+  private setChildren(how: string): void {
+    if (!this.selected) return;
+    const selector = this.selector!;
+    const cs = getComputedStyle(this.selected);
+    const orig = (prop: string) => this.store.get(selector, prop)?.original ?? cs.getPropertyValue(prop);
+    if (how === 'normal') {
+      const items = ['display', 'flex-direction'].filter((p) => this.store.get(selector, p));
+      // Si la página ya lo tenía en fila o columna, "uno debajo de otro" es volver a bloque.
+      if (items.length === 0) return isFlex(cs.display) ? this.commit('display', 'block') : undefined;
+      // Volver a la caja original es quitar los cambios de display y dirección.
+      this.store.setMany(selector, items.map((p) => ({ prop: p, value: orig(p), original: orig(p) })));
+      return;
+    }
+    this.store.setMany(selector, [
+      { prop: 'display', value: 'flex', original: orig('display') },
+      { prop: 'flex-direction', value: how, original: orig('flex-direction') },
+    ]);
+  }
+
+  private previewColor(prop: string, value: string): void {
+    if (!this.selected) return;
+    const selector = this.selector!;
+    if (!this.colorBefore.has(prop)) this.colorBefore.set(prop, this.store.get(selector, prop));
+    const original = this.store.get(selector, prop)?.original ?? originalValue(getComputedStyle(this.selected), prop);
+    this.store.preview(selector, prop, value, original);
+  }
+
+  private finishColor(prop: string): void {
+    if (!this.selected || !this.colorBefore.has(prop)) return;
+    this.store.record(this.selector!, prop, this.colorBefore.get(prop) ?? null);
+    this.colorBefore.delete(prop);
+  }
+
+  /** Arrastrar a izquierda o derecha sobre la etiqueta de un valor numérico lo cambia. */
+  private startScrub(e: PointerEvent, prop: string): void {
+    if (!this.selected) return;
+    const cs = getComputedStyle(this.selected);
+    const raw = readValue(cs, prop);
+    const start = raw === '' ? Math.round(parseFloat(cs.fontSize) * 1.2) : Number(raw);
+    const min = NUMERIC[prop]?.min ?? 0;
+    const candidates = prop === 'font-size' ? this.fontSizes : prop === 'gap' ? this.candidates : [];
+    // Cada 2 px de ratón cambian 1 px de valor: más preciso que 1:1 en valores pequeños.
+    this.beginDrag(e, [prop], [start], (dx, _dy, ev) => {
+      const r = snap(start + dx / 2, candidates, { free: ev.altKey, coarse: ev.shiftKey, min });
+      return { values: [r.value], snapped: r.snapped };
+    });
   }
 
   private async copy(btn: HTMLButtonElement): Promise<void> {
@@ -498,8 +585,8 @@ export class Editor {
       part.innerHTML = `<div class="empty">${this.active ? 'Haz clic en un elemento de la página para ajustarlo.' : 'Pulsa «Editar» para seleccionar elementos.'}</div>`;
       return;
     }
-    // No se reconstruye mientras el usuario escribe en un campo, para no perder el foco.
-    if (focused?.dataset?.prop && part.contains(focused)) {
+    // No se reconstruye mientras el usuario escribe en un campo o arrastra, para no perder el foco.
+    if (this.drag || (focused?.dataset?.prop && part.contains(focused))) {
       this.syncInputs(part, focused);
       return;
     }
@@ -522,13 +609,19 @@ export class Editor {
           <button data-act="scope-class" class="${this.scope === 'class' ? 'on' : ''}">Todos los <code>${escapeHtml(cls)}</code> (${count})</button>
           <button data-act="scope-element" class="${this.scope === 'element' ? 'on' : ''}">Solo este</button>
         </div></div>` : ''}
-      <div class="row">
-        <div class="toggle">
-          <button data-act="mode-spacing" class="${this.mode === 'spacing' ? 'on' : ''}">Espaciado</button>
-          <button data-act="mode-size" class="${this.mode === 'size' ? 'on' : ''}">Tamaño</button>
-        </div>
-        <span class="muted">${this.mode === 'spacing' ? 'Arrastra las zonas de color' : 'Arrastra los tiradores azules'}</span>
+      <div class="toggle tabs">
+        <button data-act="mode-spacing" class="${this.mode === 'spacing' ? 'on' : ''}">Espaciado</button>
+        <button data-act="mode-size" class="${this.mode === 'size' ? 'on' : ''}">Tamaño</button>
+        <button data-act="mode-text" class="${this.mode === 'text' ? 'on' : ''}">Texto</button>
+        <button data-act="mode-layout" class="${this.mode === 'layout' ? 'on' : ''}">Alineación</button>
       </div>
+      ${this.mode === 'text' ? this.textSection(el, selector) : this.mode === 'layout' ? this.layoutSection(el, selector) : this.boxSection(el, selector, box, inline, input)}
+      <div class="muted mono" title="Selector al que se aplicarán los cambios">${escapeHtml(selector)}</div>`;
+  }
+
+  private boxSection(_el: Element, _selector: string, box: BoxModel, inline: boolean, input: (prop: string, value: number) => string): string {
+    return `
+      <div class="muted">${this.mode === 'spacing' ? 'Arrastra las zonas de color sobre el elemento' : 'Arrastra los tiradores azules del borde'}</div>
       ${inline ? `<div class="warn">Es un elemento en línea. Si cambias su ancho, alto o márgenes de arriba y abajo, se convertirá en <code>inline-block</code> para que se apliquen.</div>` : ''}
       <div class="grid">
         <span></span><span class="h">Arriba</span><span class="h">Derecha</span><span class="h">Abajo</span><span class="h">Izq.</span>
@@ -540,18 +633,117 @@ export class Editor {
       <div class="grid" style="grid-template-columns: 62px 1fr 62px 1fr">
         <span>Ancho</span>${input('width', box.cssWidth)}
         <span>Alto</span>${input('height', box.cssHeight)}
-      </div>
-      <div class="muted mono" title="Selector al que se aplicarán los cambios">${escapeHtml(selector)}</div>`;
+      </div>`;
   }
 
-  private syncInputs(part: HTMLElement, except: HTMLInputElement): void {
+  /** Botones de opción: el activo es el valor actual de la propiedad. */
+  private choice(prop: string, current: string, options: readonly [string, string][]): string {
+    const changed = this.store.get(this.selector!, prop) ? ' changed' : '';
+    return `<div class="toggle${changed}">${options.map(([value, label]) =>
+      `<button data-act="set" data-prop="${prop}" data-value="${escapeHtml(value)}" class="${current === value ? 'on' : ''}">${label}</button>`).join('')}</div>`;
+  }
+
+  private numberField(prop: string, value: string, placeholder = ''): string {
+    const changed = this.store.get(this.selector!, prop) ? 'changed' : '';
+    const step = prop === 'letter-spacing' ? '0.1' : '1';
+    return `<label class="scrub" data-scrub="${prop}" title="Arrastra a izquierda o derecha para ajustar">${styleLabel(prop)}</label>
+      <span class="unit"><input type="number" step="${step}" min="${NUMERIC[prop]?.min ?? 0}" data-prop="${prop}" value="${value}" placeholder="${placeholder}" class="${changed}" aria-label="${styleLabel(prop)}"><i>px</i></span>`;
+  }
+
+  private colorField(prop: string, cs: CSSStyleDeclaration): string {
+    const changed = this.store.get(this.selector!, prop) ? 'changed' : '';
+    const none = !this.store.get(this.selector!, prop) && isTransparent(cs.getPropertyValue(prop));
+    return `<span>${styleLabel(prop)}</span>
+      <span class="row"><input type="color" data-prop="${prop}" value="${none ? '#ffffff' : readValue(cs, prop)}" class="${changed}" aria-label="${styleLabel(prop)}">
+      ${none ? '<span class="muted">sin color</span>' : `<code>${readValue(cs, prop)}</code>`}</span>`;
+  }
+
+  private textSection(el: Element, _selector: string): string {
+    const cs = getComputedStyle(el);
+    const weight = readValue(cs, 'font-weight');
+    const family = cs.fontFamily;
+    const fonts = this.fonts.includes(family) ? this.fonts : [family, ...this.fonts];
+    const fontChanged = this.store.get(this.selector!, 'font-family') ? 'changed' : '';
+    const weightChanged = this.store.get(this.selector!, 'font-weight') ? 'changed' : '';
+    const lineHint = String(Math.round(parseFloat(cs.fontSize) * 1.2));
+    return `
+      <div class="muted">Arrastra sobre el nombre de un valor para ajustarlo</div>
+      <div class="form">
+        ${this.numberField('font-size', readValue(cs, 'font-size'))}
+        <span>Grosor</span>
+        <select data-prop="font-weight" class="${weightChanged}" aria-label="Grosor">${WEIGHTS.map(([v, l]) =>
+          `<option value="${v}" ${v === weight ? 'selected' : ''}>${l} (${v})</option>`).join('')}
+          ${WEIGHTS.some(([v]) => v === weight) ? '' : `<option selected value="${escapeHtml(weight)}">${escapeHtml(weight)}</option>`}</select>
+        <span>Fuente</span>
+        <select data-prop="font-family" class="${fontChanged}" aria-label="Fuente">${fonts.map((f) =>
+          `<option value="${escapeHtml(f)}" ${f === family ? 'selected' : ''}>${escapeHtml(f.split(',')[0].replace(/["']/g, ''))}</option>`).join('')}</select>
+        ${this.numberField('line-height', readValue(cs, 'line-height'), `auto (~${lineHint})`)}
+        ${this.numberField('letter-spacing', readValue(cs, 'letter-spacing'))}
+        ${this.colorField('color', cs)}
+        ${this.colorField('background-color', cs)}
+      </div>
+      <div class="row"><span class="muted">Alinear texto</span>
+        ${this.choice('text-align', readValue(cs, 'text-align'), [['left', 'Izquierda'], ['center', 'Centro'], ['right', 'Derecha'], ['justify', 'Justificado']])}
+      </div>
+      <div class="row">
+        ${this.choice('font-style', cs.fontStyle === 'italic' ? 'italic' : 'normal', [['normal', 'Normal'], ['italic', '<i>Cursiva</i>']])}
+        ${this.choice('text-decoration-line', cs.textDecorationLine.includes('underline') ? 'underline' : 'none', [['none', 'Sin subrayar'], ['underline', '<u>Subrayado</u>']])}
+      </div>
+      <div class="row"><span class="muted">Mayúsculas</span>
+        ${this.choice('text-transform', cs.textTransform, [['none', 'Como está'], ['uppercase', 'TODO'], ['capitalize', 'Cada Palabra']])}
+      </div>`;
+  }
+
+  private layoutSection(el: Element, _selector: string): string {
+    const cs = getComputedStyle(el);
+    const flex = isFlex(cs.display);
+    const grid = isGrid(cs.display);
+    const childCount = el.children.length;
+    const children = flex ? (cs.flexDirection.startsWith('column') ? 'column' : 'row') : grid ? 'grid' : 'normal';
+    const childButtons = `<div class="toggle">${([['normal', 'Uno debajo de otro'], ['row', 'En fila'], ['column', 'En columna']] as const)
+      .map(([v, l]) => `<button data-act="children" data-value="${v}" class="${children === v ? 'on' : ''}">${l}</button>`).join('')}</div>`;
+
+    let alignment = '';
+    if (flex) {
+      const h = axisProp(cs.flexDirection, 'horizontal');
+      const v = axisProp(cs.flexDirection, 'vertical');
+      // Los valores "normal", "start", "end"... se muestran como su equivalente en los botones.
+      const norm = (prop: string) => {
+        const val = cs.getPropertyValue(prop);
+        if (val === 'normal') return prop === 'align-items' ? 'stretch' : 'flex-start';
+        return val.replace(/^(start|left)$/, 'flex-start').replace(/^(end|right)$/, 'flex-end');
+      };
+      const opts = (prop: string): [string, string][] => prop === 'justify-content'
+        ? [['flex-start', 'Inicio'], ['center', 'Centro'], ['flex-end', 'Final'], ['space-between', 'Repartir']]
+        : [['flex-start', 'Inicio'], ['center', 'Centro'], ['flex-end', 'Final'], ['stretch', 'Estirar']];
+      alignment = `
+        <div class="row"><span class="muted lbl">Horizontal</span>${this.choice(h, norm(h), opts(h))}</div>
+        <div class="row"><span class="muted lbl">Vertical</span>${this.choice(v, norm(v), opts(v))}</div>`;
+    }
+    const gap = flex || grid
+      ? `<div class="form">${this.numberField('gap', readValue(cs, 'gap'))}</div>`
+      : '';
+    if (childCount === 0) {
+      return '<div class="empty">Este elemento no contiene otros elementos. Pulsa «↑ Padre» para alinear el contenedor en el que está.</div>';
+    }
+    return `
+      <div class="row"><span class="muted">Colocar ${childCount === 1 ? 'el elemento de dentro' : `los ${childCount} elementos de dentro`}</span></div>
+      ${grid ? '<div class="muted">Este elemento usa una cuadrícula (grid). Aquí solo se ajusta la separación.</div>' : childButtons}
+      ${alignment}
+      ${gap}
+      ${!flex && !grid ? '<div class="muted">Elige «En fila» o «En columna» para poder alinear y separar los elementos de dentro.</div>' : ''}`;
+  }
+
+  private syncInputs(part: HTMLElement, except: HTMLInputElement | null): void {
     if (!this.selected) return;
     const box = measure(this.selected);
     for (const inp of Array.from(part.querySelectorAll<HTMLInputElement>('input[data-prop]'))) {
       if (inp === except) continue;
       const prop = inp.dataset.prop!;
+      const [kind, side] = prop.split('-') as [Kind, Side];
       const v = prop === 'width' ? box.cssWidth : prop === 'height' ? box.cssHeight
-        : box[prop.split('-')[0] as Kind][prop.split('-')[1] as Side];
+        : (kind === 'margin' || kind === 'padding') && SIDES.includes(side) ? box[kind][side]
+        : readValue(getComputedStyle(this.selected), prop);
       inp.value = String(v);
     }
   }

@@ -3,6 +3,9 @@ import { mkdirSync, copyFileSync, readFileSync, writeFileSync, rmSync } from 'no
 
 const base = process.env.SITE_URL ?? 'https://uo285395.github.io/css-workout/';
 const out = 'site';
+// GitHub Pages sirve los archivos con 10 minutos de caché: la demo pide el script con la versión
+// en la URL para que, tras publicar, el navegador no siga usando el anterior.
+const version = (process.env.GITHUB_SHA ?? String(Date.now())).slice(0, 7);
 
 rmSync(out, { recursive: true, force: true });
 mkdirSync(`${out}/demo`, { recursive: true });
@@ -11,7 +14,7 @@ copyFileSync('dist/css-workout.js', `${out}/css-workout.js`);
 copyFileSync('demo/prototype.css', `${out}/demo/prototype.css`);
 // En la demo publicada se usa el script compilado en lugar del código fuente.
 const demo = readFileSync('demo/index.html', 'utf8')
-  .replace(/<!--[^>]*-->\s*<script type="module" src="\/src\/index.ts"><\/script>/, '<script src="../css-workout.js"></script>');
+  .replace(/<!--[^>]*-->\s*<script type="module" src="\/src\/index.ts"><\/script>/, `<script src="../css-workout.js?v=${version}"></script>`);
 writeFileSync(`${out}/demo/index.html`, demo);
 
 const bookmarklet = `javascript:(()=>{const s=document.createElement('script');s.src='${base}css-workout.js?'+Date.now();document.body.appendChild(s)})()`;

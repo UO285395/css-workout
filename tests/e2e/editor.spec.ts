@@ -4,6 +4,8 @@ const ui = (page: Page, sel: string) => page.locator(`css-workout ${sel}`);
 const style = (loc: Locator, prop: string) => loc.evaluate((el, p) => getComputedStyle(el).getPropertyValue(p), prop);
 
 async function dragBy(page: Page, handle: Locator, dx: number, dy: number) {
+  // La capa se recoloca en el siguiente frame: hay que esperar a que el tirador aparezca.
+  await expect(handle).toBeVisible();
   const b = (await handle.boundingBox())!;
   const x = b.x + b.width / 2, y = b.y + b.height / 2;
   await page.mouse.move(x, y);

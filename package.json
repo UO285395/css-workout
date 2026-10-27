@@ -1,0 +1,20 @@
+{
+  "name": "css-workout",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Editor visual para ajustar espaciados y tamaños de un prototipo arrastrando, y copiar el CSS resultante.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "test": "vitest run",
+    "test:e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "jsdom": "26.1.0",
+    "typescript": "5.9.3",
+    "vite": "6.4.5",
+    "vitest": "3.2.7"
+  }
+}

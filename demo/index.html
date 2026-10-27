@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Prototipo de ejemplo · CSS Workout</title>
+  <link rel="stylesheet" href="./prototype.css">
+</head>
+<body>
+  <header class="nav">
+    <span class="logo">Acme</span>
+    <nav><a href="#">Producto</a><a href="#">Precios</a><a href="#">Contacto</a></nav>
+  </header>
+
+  <main>
+    <section class="hero">
+      <h1>Un prototipo cualquiera</h1>
+      <p>Haz clic en cualquier elemento y arrastra las zonas de color para ajustar márgenes y rellenos.</p>
+      <a class="btn" href="#">Empezar</a>
+    </section>
+
+    <section class="cards">
+      <article class="card">
+        <h2>Rápido</h2>
+        <p>Las tarjetas comparten la clase <code>.card</code>: un cambio puede afectar a todas o solo a una.</p>
+      </article>
+      <article class="card">
+        <h2>Sencillo</h2>
+        <p>El arrastre se pega a los espaciados que ya usa la página.</p>
+      </article>
+      <article class="card card--featured">
+        <h2>Copiable</h2>
+        <p>Al terminar, copia el CSS y pégalo en el prototipo.</p>
+      </article>
+    </section>
+  </main>
+
+  <!-- En desarrollo (npm run dev) se carga desde el código fuente. -->
+  <script type="module" src="/src/index.ts"></script>
+</body>
+</html>

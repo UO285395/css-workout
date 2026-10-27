@@ -4,12 +4,15 @@ export interface Entry {
   original: string;
 }
 
-interface Command {
+interface Step {
   selector: string;
   prop: string;
   before: Entry | null;
   after: Entry | null;
 }
+
+/** Un paso del historial; puede tocar varias propiedades a la vez (p. ej. ancho, alto y display). */
+type Command = Step[];
 
 export interface ChangeRow {
   selector: string;
@@ -46,29 +49,41 @@ export class ChangeStore {
 
   /** Cambia un valor y lo apunta en el historial. */
   set(selector: string, prop: string, value: string, original: string): void {
-    const before = this.get(selector, prop);
-    this.preview(selector, prop, value, original);
-    this.record(selector, prop, before);
+    this.setMany(selector, [{ prop, value, original }]);
+  }
+
+  /** Cambia varias propiedades como un solo paso de deshacer. */
+  setMany(selector: string, items: readonly { prop: string; value: string; original: string }[]): void {
+    const befores = items.map(({ prop }) => ({ prop, before: this.get(selector, prop) }));
+    for (const it of items) this.preview(selector, it.prop, it.value, it.original);
+    this.recordMany(selector, befores);
   }
 
   /** Apunta en el historial el paso de `before` al valor actual (al soltar un arrastre). */
   record(selector: string, prop: string, before: Entry | null): void {
-    const after = this.get(selector, prop);
-    if (before?.value === after?.value) return;
-    // Un cambio que vuelve al valor original deja de ser un cambio.
-    if (after && after.value === after.original) {
-      this.write(selector, prop, null);
-      this.pushCommand({ selector, prop, before, after: null });
-      return;
+    this.recordMany(selector, [{ prop, before }]);
+  }
+
+  recordMany(selector: string, items: readonly { prop: string; before: Entry | null }[]): void {
+    const cmd: Command = [];
+    for (const { prop, before } of items) {
+      let after = this.get(selector, prop);
+      if (before?.value === after?.value) continue;
+      // Un cambio que vuelve al valor original deja de ser un cambio.
+      if (after && after.value === after.original) {
+        this.write(selector, prop, null);
+        after = null;
+      }
+      cmd.push({ selector, prop, before, after });
     }
-    this.pushCommand({ selector, prop, before, after });
+    if (cmd.length) this.pushCommand(cmd);
   }
 
   remove(selector: string, prop: string): void {
     const before = this.get(selector, prop);
     if (!before) return;
     this.write(selector, prop, null);
-    this.pushCommand({ selector, prop, before, after: null });
+    this.pushCommand([{ selector, prop, before, after: null }]);
   }
 
   /** Restaura cambios guardados (sin historial). */
@@ -94,7 +109,7 @@ export class ChangeStore {
   undo(): void {
     const cmd = this.undoStack.pop();
     if (!cmd) return;
-    this.write(cmd.selector, cmd.prop, cmd.before);
+    for (const st of cmd) this.write(st.selector, st.prop, st.before);
     this.redoStack.push(cmd);
     this.emit();
   }
@@ -102,7 +117,7 @@ export class ChangeStore {
   redo(): void {
     const cmd = this.redoStack.pop();
     if (!cmd) return;
-    this.write(cmd.selector, cmd.prop, cmd.after);
+    for (const st of cmd) this.write(st.selector, st.prop, st.after);
     this.undoStack.push(cmd);
     this.emit();
   }

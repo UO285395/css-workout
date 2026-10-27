@@ -41,24 +41,16 @@ Los cambios se guardan en el navegador por cada URL, así que sobreviven a recar
 
 ## Cargar el script en un prototipo
 
-```bash
-npm install
-npm run build        # genera dist/css-workout.js
-```
+La versión publicada vive en GitHub Pages: <https://uo285395.github.io/css-workout/>. Allí está el botón para arrastrar a la barra de marcadores y una demo.
 
-Añade al HTML del prototipo:
+- **Como marcador:** arrastra el botón de la portada a la barra de marcadores y púlsalo en cualquier prototipo. Pulsarlo otra vez cierra el editor.
+- **Dentro del prototipo:** añade al HTML
 
-```html
-<script src="ruta/a/css-workout.js"></script>
-```
+  ```html
+  <script src="https://uo285395.github.io/css-workout/css-workout.js"></script>
+  ```
 
-O crea un marcador (bookmarklet) con esta URL, cambiando la dirección del script por donde lo tengas publicado:
-
-```text
-javascript:(()=>{const s=document.createElement('script');s.src='https://TU-SERVIDOR/css-workout.js?'+Date.now();document.body.appendChild(s)})()
-```
-
-Pulsar el marcador otra vez cierra el editor.
+Cada push a `main` vuelve a publicar la web (`.github/workflows/pages.yml`, que usa `scripts/build-site.mjs`).
 
 ## Desarrollo
 
@@ -81,4 +73,4 @@ npm run test:e2e     # pruebas en navegador (Playwright) sobre la demo
 
 - Solo margen, relleno, ancho y alto en píxeles.
 - Los cambios no se aplican dentro de iframes ni de Shadow DOM del prototipo.
-- En elementos en línea (`display: inline`) el ancho, el alto y los márgenes verticales no tienen efecto; el panel lo avisa.
+- En elementos en línea (`display: inline`, como un `span` o un enlace suelto) el ancho, el alto y los márgenes verticales no tienen efecto. Al cambiarlos, el editor añade `display: inline-block` en el mismo paso de deshacer y lo incluye en el CSS copiado.

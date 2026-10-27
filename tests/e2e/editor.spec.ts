@@ -63,6 +63,21 @@ test('modo tamaño: arrastrar el tirador cambia el ancho', async ({ page }) => {
   expect(Math.round((await btn.boundingBox())!.width)).toBe(before + 40);
 });
 
+test('en un elemento en línea, cambiar el ancho añade inline-block', async ({ page }) => {
+  const link = page.locator('.card code').first();
+  await link.click();
+  await expect(ui(page, '.warn')).toContainText('inline-block');
+  const before = Math.round((await link.boundingBox())!.width);
+  await ui(page, 'button[data-act="mode-size"]').click();
+  await dragBy(page, ui(page, '.size.w'), 30, 0);
+  expect(await style(link, 'display')).toBe('inline-block');
+  expect(Math.round((await link.boundingBox())!.width)).toBe(before + 30);
+  await ui(page, 'details summary').click();
+  await expect(ui(page, 'textarea')).toHaveValue(/display: inline-block; \/\* antes: inline \*\//);
+  await page.keyboard.press('Control+z');
+  expect(await style(link, 'display')).toBe('inline');
+});
+
 test('escribir un valor en el panel también aplica el cambio', async ({ page }) => {
   const hero = page.locator('.hero');
   await hero.click({ position: { x: 10, y: 10 } });

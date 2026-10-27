@@ -40,4 +40,17 @@ describe('ChangeStore', () => {
     s.set('a', 'width', '20px', '0px');
     expect(s.canRedo()).toBe(false);
   });
+
+  it('varias propiedades cambiadas a la vez se deshacen en un solo paso', () => {
+    const s = new ChangeStore();
+    s.setMany('a', [
+      { prop: 'display', value: 'inline-block', original: 'inline' },
+      { prop: 'width', value: '120px', original: '80px' },
+    ]);
+    expect(s.size).toBe(2);
+    s.undo();
+    expect(s.size).toBe(0);
+    s.redo();
+    expect(s.get('a', 'display')?.value).toBe('inline-block');
+  });
 });

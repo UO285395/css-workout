@@ -8,6 +8,11 @@ type Mode = 'spacing' | 'size';
 type Kind = 'margin' | 'padding';
 
 const HIT_MIN = 8;
+/** Propiedades que un elemento en línea ignora; al tocarlas se pasa a `inline-block`. */
+const BLOCK_ONLY = ['width', 'height', 'margin-top', 'margin-bottom'];
+
+export const needsInlineBlock = (display: string, props: readonly string[]) =>
+  display === 'inline' && props.some((p) => BLOCK_ONLY.includes(p));
 const STORAGE_PREFIX = 'css-workout:';
 
 const SIDE_LABEL: Record<Side, string> = { top: 'superior', right: 'derecho', bottom: 'inferior', left: 'izquierdo' };
@@ -16,6 +21,7 @@ const KIND_LABEL: Record<Kind, string> = { margin: 'Margen', padding: 'Relleno' 
 export function propLabel(prop: string): string {
   if (prop === 'width') return 'Ancho';
   if (prop === 'height') return 'Alto';
+  if (prop === 'display') return 'Tipo de caja';
   const [kind, side] = prop.split('-') as [Kind, Side];
   return KIND_LABEL[kind] && SIDE_LABEL[side] ? `${KIND_LABEL[kind]} ${SIDE_LABEL[side]}` : prop;
 }
@@ -43,6 +49,8 @@ interface Drag {
   selector: string;
   before: (Entry | null)[];
   originals: string[];
+  /** `display: inline-block` que se añade al arrastrar ancho, alto o márgenes verticales de un elemento en línea. */
+  display: { before: Entry | null } | null;
   start: number[];
   pointer: { x: number; y: number };
   compute: (dx: number, dy: number, e: PointerEvent) => { values: number[]; snapped: boolean };
@@ -294,6 +302,7 @@ export class Editor {
       props, selector, start, compute,
       before: props.map((p) => this.store.get(selector, p)),
       originals: props.map((p) => this.store.get(selector, p)?.original ?? cs.getPropertyValue(p)),
+      display: needsInlineBlock(cs.display, props) ? { before: this.store.get(selector, 'display') } : null,
       pointer: { x: e.clientX, y: e.clientY },
     };
     const move = (ev: PointerEvent) => this.onDragMove(ev);
@@ -312,6 +321,7 @@ export class Editor {
     const d = this.drag;
     if (!d) return;
     const { values, snapped } = d.compute(e.clientX - d.pointer.x, e.clientY - d.pointer.y, e);
+    if (d.display) this.store.preview(d.selector, 'display', 'inline-block', 'inline');
     d.props.forEach((p, i) => this.store.preview(d.selector, p, `${values[i]}px`, d.originals[i]));
     const tip = this.ov.tip;
     tip.style.display = '';
@@ -326,7 +336,9 @@ export class Editor {
     this.drag = null;
     this.ov.tip.style.display = 'none';
     if (!d) return;
-    d.props.forEach((p, i) => this.store.record(d.selector, p, d.before[i]));
+    const steps = d.props.map((prop, i) => ({ prop, before: d.before[i] }));
+    if (d.display) steps.unshift({ prop: 'display', before: d.display.before });
+    this.store.recordMany(d.selector, steps);
   }
 
   // ---------- Eventos de la página ----------
@@ -449,8 +461,11 @@ export class Editor {
     const v = Math.max(0, Math.round(Number(input.value)));
     if (!Number.isFinite(v)) return;
     const selector = this.selector!;
-    const original = this.store.get(selector, prop)?.original ?? getComputedStyle(this.selected).getPropertyValue(prop);
-    this.store.set(selector, prop, `${v}px`, original);
+    const cs = getComputedStyle(this.selected);
+    const original = this.store.get(selector, prop)?.original ?? cs.getPropertyValue(prop);
+    const items = [{ prop, value: `${v}px`, original }];
+    if (needsInlineBlock(cs.display, [prop])) items.unshift({ prop: 'display', value: 'inline-block', original: 'inline' });
+    this.store.setMany(selector, items);
   }
 
   private async copy(btn: HTMLButtonElement): Promise<void> {
@@ -514,7 +529,7 @@ export class Editor {
         </div>
         <span class="muted">${this.mode === 'spacing' ? 'Arrastra las zonas de color' : 'Arrastra los tiradores azules'}</span>
       </div>
-      ${inline ? `<div class="warn">Es un elemento en línea: el ancho, el alto y los márgenes verticales no le afectan.</div>` : ''}
+      ${inline ? `<div class="warn">Es un elemento en línea. Si cambias su ancho, alto o márgenes de arriba y abajo, se convertirá en <code>inline-block</code> para que se apliquen.</div>` : ''}
       <div class="grid">
         <span></span><span class="h">Arriba</span><span class="h">Derecha</span><span class="h">Abajo</span><span class="h">Izq.</span>
         <span><i class="dot margin"></i>Margen</span>

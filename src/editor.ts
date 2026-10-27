@@ -62,6 +62,36 @@ interface Drag {
   compute: (dx: number, dy: number, e: PointerEvent) => { values: number[]; snapped: boolean };
 }
 
+/**
+ * Espacio que sobra dentro de un contenedor flex en cada eje. Si no sobra nada, alinear o
+ * repartir no tiene efecto visible, y conviene decírselo al usuario.
+ */
+function freeSpace(el: Element, cs: CSSStyleDeclaration): { horizontal: number; vertical: number } {
+  const px = (v: string) => parseFloat(v) || 0;
+  const r = el.getBoundingClientRect();
+  const innerW = r.width - px(cs.paddingLeft) - px(cs.paddingRight) - px(cs.borderLeftWidth) - px(cs.borderRightWidth);
+  const innerH = r.height - px(cs.paddingTop) - px(cs.paddingBottom) - px(cs.borderTopWidth) - px(cs.borderBottomWidth);
+  const kids = Array.from(el.children).map((c) => {
+    const k = c.getBoundingClientRect();
+    const m = getComputedStyle(c);
+    return { w: k.width + px(m.marginLeft) + px(m.marginRight), h: k.height + px(m.marginTop) + px(m.marginBottom) };
+  });
+  const gaps = (n: number, gap: string) => Math.max(0, n - 1) * px(gap);
+  const row = !cs.flexDirection.startsWith('column');
+  const sumW = kids.reduce((a, k) => a + k.w, 0) + gaps(kids.length, cs.columnGap);
+  const sumH = kids.reduce((a, k) => a + k.h, 0) + gaps(kids.length, cs.rowGap);
+  const maxW = Math.max(0, ...kids.map((k) => k.w));
+  const maxH = Math.max(0, ...kids.map((k) => k.h));
+  // Con align-items: stretch los hijos llenan el eje cruzado, pero alinearlos los encoge a su
+  // contenido: ahí sí habrá efecto, así que no se cuenta como falta de espacio.
+  const stretched = cs.alignItems === 'stretch' || cs.alignItems === 'normal';
+  const cross = (v: number) => (stretched ? Infinity : v);
+  return {
+    horizontal: row ? innerW - sumW : cross(innerW - maxW),
+    vertical: row ? cross(innerH - maxH) : innerH - sumH,
+  };
+}
+
 export class Editor {
   readonly store = new ChangeStore();
 
@@ -580,14 +610,16 @@ export class Editor {
 
   private renderSelectionPart(part: HTMLElement): void {
     const el = this.selected;
-    const focused = this.root.activeElement as HTMLInputElement | null;
+    const focused = this.root.activeElement;
     if (!el) {
       part.innerHTML = `<div class="empty">${this.active ? 'Haz clic en un elemento de la página para ajustarlo.' : 'Pulsa «Editar» para seleccionar elementos.'}</div>`;
       return;
     }
     // No se reconstruye mientras el usuario escribe en un campo o arrastra, para no perder el foco.
-    if (this.drag || (focused?.dataset?.prop && part.contains(focused))) {
-      this.syncInputs(part, focused);
+    // Los botones también llevan data-prop, pero esos sí deben redibujarse para marcar la opción activa.
+    const typing = (focused instanceof HTMLInputElement || focused instanceof HTMLSelectElement) && part.contains(focused);
+    if (this.drag || typing) {
+      this.syncInputs(part, typing ? (focused as HTMLInputElement) : null);
       return;
     }
     const selector = this.selector!;
@@ -716,9 +748,15 @@ export class Editor {
       const opts = (prop: string): [string, string][] => prop === 'justify-content'
         ? [['flex-start', 'Inicio'], ['center', 'Centro'], ['flex-end', 'Final'], ['space-between', 'Repartir']]
         : [['flex-start', 'Inicio'], ['center', 'Centro'], ['flex-end', 'Final'], ['stretch', 'Estirar']];
+      const free = freeSpace(el, cs);
+      const tight = (axis: 'horizontal' | 'vertical') => free[axis] < 1
+        ? `<div class="hint">Sin espacio libre en ${axis}: no se notará hasta que el contenedor sea más ${axis === 'horizontal' ? 'ancho' : 'alto'} (pestaña Tamaño) que su contenido.</div>`
+        : '';
       alignment = `
         <div class="row"><span class="muted lbl">Horizontal</span>${this.choice(h, norm(h), opts(h))}</div>
-        <div class="row"><span class="muted lbl">Vertical</span>${this.choice(v, norm(v), opts(v))}</div>`;
+        ${tight('horizontal')}
+        <div class="row"><span class="muted lbl">Vertical</span>${this.choice(v, norm(v), opts(v))}</div>
+        ${tight('vertical')}`;
     }
     const gap = flex || grid
       ? `<div class="form">${this.numberField('gap', readValue(cs, 'gap'))}</div>`

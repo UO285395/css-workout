@@ -71,6 +71,7 @@ select.changed { border-color: #3b82f6; background: #eff6ff; }
 input[type=color] { width: 32px; height: 22px; padding: 0; border: 1px solid #d2d2d7; border-radius: 4px; background: none; cursor: pointer; }
 input[type=color].changed { border-color: #3b82f6; }
 .lbl { width: 66px; }
+.hint { color: #6e6e73; font-size: 11px; margin: -4px 0 0 72px; }
 .grid { display: grid; grid-template-columns: 62px repeat(4, 1fr); gap: 4px; align-items: center; }
 .grid .h { text-align: center; color: #6e6e73; font-size: 11px; }
 input[type=number] { width: 100%; font: inherit; padding: 2px 4px; border: 1px solid #d2d2d7; border-radius: 4px; }

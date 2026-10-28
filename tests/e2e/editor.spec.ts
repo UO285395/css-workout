@@ -198,3 +198,36 @@ test('alinear texto: funciona en un bloque y avisa si el elemento mide lo mismo 
   await page.locator('.btn').click();
   await expect(ui(page, '[data-hint="text-align"]')).toBeVisible();
 });
+
+test('alinear un botón que mide lo mismo que su texto mueve el botón entero', async ({ page }) => {
+  const btn = page.locator('.btn');
+  const hero = page.locator('.hero');
+  await btn.click();
+  await ui(page, 'button[data-act="mode-text"]').click();
+  await expect(ui(page, '[data-hint="text-align"]')).toContainText('se moverá el elemento entero');
+
+  await ui(page, 'button[data-prop="text-align"][data-value="right"]').click();
+  const h = (await hero.boundingBox())!;
+  const pad = parseFloat(await style(hero, 'padding-right'));
+  let b = (await btn.boundingBox())!;
+  expect(Math.round(b.x + b.width)).toBe(Math.round(h.x + h.width - pad));
+  await expect(ui(page, 'button[data-prop="text-align"].on')).toHaveText('Derecha');
+
+  await ui(page, 'button[data-prop="text-align"][data-value="left"]').click();
+  b = (await btn.boundingBox())!;
+  expect(Math.round(b.x)).toBe(Math.round(h.x + parseFloat(await style(hero, 'padding-left'))));
+
+  // Todo el movimiento es un único paso de deshacer.
+  await ui(page, 'button[data-act="undo"]').click();
+  b = (await btn.boundingBox())!;
+  expect(Math.round(b.x + b.width)).toBe(Math.round(h.x + h.width - pad));
+});
+
+test('alinear un elemento dentro de una fila flex lo mueve con márgenes automáticos', async ({ page }) => {
+  const logo = page.locator('.logo');
+  await logo.click();
+  await ui(page, 'button[data-act="mode-text"]').click();
+  const x0 = (await logo.boundingBox())!.x;
+  await ui(page, 'button[data-prop="text-align"][data-value="center"]').click();
+  expect((await logo.boundingBox())!.x).toBeGreaterThan(x0 + 100);
+});

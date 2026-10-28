@@ -92,6 +92,12 @@ function freeSpace(el: Element, cs: CSSStyleDeclaration): { horizontal: number; 
   };
 }
 
+/** true si el elemento va en medio de una línea de texto (p. ej. un enlace dentro de un párrafo). */
+function inTextLine(el: Element): boolean {
+  if (getComputedStyle(el).display !== 'inline') return false;
+  return Array.from(el.parentElement?.childNodes ?? []).some((n) => n.nodeType === Node.TEXT_NODE && n.textContent!.trim() !== '');
+}
+
 /** true si el texto ya ocupa todo el ancho disponible: entonces text-align no tiene efecto visible. */
 function textFitsBox(el: Element, cs: CSSStyleDeclaration): boolean {
   if (cs.display === 'inline') return true;
@@ -508,7 +514,10 @@ export class Editor {
       case 'mode-size': this.mode = 'size'; break;
       case 'mode-text': this.mode = 'text'; break;
       case 'mode-layout': this.mode = 'layout'; break;
-      case 'set': this.commit(btn.dataset.prop!, btn.dataset.value!); break;
+      case 'set':
+        if (btn.dataset.prop === 'text-align') this.alignText(btn.dataset.value!);
+        else this.commit(btn.dataset.prop!, btn.dataset.value!);
+        break;
       case 'children': this.setChildren(btn.dataset.value!); break;
       case 'scope-class': this.scope = 'class'; break;
       case 'scope-element': this.scope = 'element'; break;
@@ -545,6 +554,46 @@ export class Editor {
     const original = this.store.get(selector, prop)?.original ?? originalValue(cs, prop);
     const items = [{ prop, value, original }];
     if (needsInlineBlock(cs.display, [prop])) items.unshift({ prop: 'display', value: 'inline-block', original: 'inline' });
+    this.store.setMany(selector, items);
+  }
+
+  /**
+   * Alinear texto. Si el elemento mide lo mismo que su texto, text-align no movería nada:
+   * entonces se mueve el elemento dentro de su contenedor, que es lo que el usuario espera.
+   */
+  private alignText(value: string): void {
+    const el = this.selected;
+    if (!el) return;
+    const cs = getComputedStyle(el);
+    const parent = el.parentElement;
+    if (value === 'justify' || !parent || !textFitsBox(el, cs) || inTextLine(el)) return this.commit('text-align', value);
+
+    const selector = this.selector!;
+    const orig = (prop: string) => this.store.get(selector, prop)?.original ?? originalValue(cs, prop);
+    const item = (prop: string, v: string) => ({ prop, value: v, original: orig(prop) });
+    const pcs = getComputedStyle(parent);
+    const items = [item('text-align', value)];
+    const pos = value === 'left' ? 'flex-start' : value === 'right' ? 'flex-end' : 'center';
+    // Márgenes automáticos: el hueco libre se va al lado contrario de donde se quiere el elemento.
+    const autoMargins = () => {
+      const keep = (prop: string) => (orig(prop) === 'auto' ? '0px' : orig(prop));
+      items.push(item('margin-left', value === 'left' ? keep('margin-left') : 'auto'));
+      items.push(item('margin-right', value === 'right' ? keep('margin-right') : 'auto'));
+    };
+
+    if (isFlex(pcs.display)) {
+      if (pcs.flexDirection.startsWith('column')) items.push(item('align-self', pos));
+      else autoMargins();
+    } else if (isGrid(pcs.display)) {
+      items.push(item('justify-self', pos.replace('flex-', '')));
+    } else {
+      // En un bloque normal, el elemento pasa a ocupar su propia línea con el ancho de su contenido.
+      if (cs.display !== 'block' || cs.width === pcs.width) {
+        items.push(item('display', 'block'));
+        items.push(item('width', 'fit-content'));
+      }
+      autoMargins();
+    }
     this.store.setMany(selector, items);
   }
 
@@ -729,7 +778,9 @@ export class Editor {
       <div class="row"><span class="muted">Alinear texto</span>
         ${this.choice('text-align', readValue(cs, 'text-align'), [['left', 'Izquierda'], ['center', 'Centro'], ['right', 'Derecha'], ['justify', 'Justificado']])}
       </div>
-      ${textFitsBox(el, cs) ? `<div class="warn" data-hint="text-align">Este elemento mide lo mismo que su texto, así que alinear el texto no lo mueve. Para colocarlo en otro sitio, pulsa «↑ Padre» y usa la pestaña Alineación, o dale más ancho en Tamaño.</div>` : ''}
+      ${textFitsBox(el, cs) ? (inTextLine(el)
+        ? `<div class="warn" data-hint="text-align">Este elemento forma parte de una línea de texto. Para alinearlo, pulsa «↑ Padre» y alinea el párrafo entero.</div>`
+        : `<div class="hint-box" data-hint="text-align">Este elemento mide lo mismo que su texto: al alinear se moverá el elemento entero dentro de su contenedor.</div>`) : ''}
       <div class="row">
         ${this.choice('font-style', cs.fontStyle === 'italic' ? 'italic' : 'normal', [['normal', 'Normal'], ['italic', '<i>Cursiva</i>']])}
         ${this.choice('text-decoration-line', cs.textDecorationLine.includes('underline') ? 'underline' : 'none', [['none', 'Sin subrayar'], ['underline', '<u>Subrayado</u>']])}

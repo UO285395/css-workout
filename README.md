@@ -12,9 +12,10 @@ Pensado para gente que entiende qué es un margen o un relleno pero no escribe C
    - **Espaciado:** arrastra las zonas naranjas (margen) y verdes (relleno) de cada lado.
    - **Tamaño:** arrastra los tiradores azules del borde derecho, inferior o la esquina.
    - **Texto:** tamaño de letra, grosor, fuente, interlineado, espacio entre letras, color del texto y del fondo, alineación, cursiva, subrayado y mayúsculas. Si el elemento mide lo mismo que su texto (un botón, un enlace, un logo), alinear mueve el elemento entero dentro de su contenedor.
-   - **Alineación:** coloca los elementos de dentro uno debajo de otro, en fila o en columna; repártelos y alinéalos en horizontal y vertical, y ajusta la separación entre ellos.
+   - **Alineación:** coloca los elementos de dentro uno debajo de otro, en fila o en columna; repártelos y alinéalos en horizontal y vertical, y ajusta la separación entre ellos. Si el contenedor del elemento lo coloca en fila, columna o cuadrícula, también puedes cambiar su **orden** (primero, antes, después, último) sin tocar el HTML. En una **cuadrícula** eliges el número de columnas, la separación entre columnas y filas (también arrastrando los huecos morados) y cuántas columnas ocupa cada hijo.
 
    Los valores numéricos se pueden escribir o ajustar arrastrando a izquierda o derecha sobre su nombre.
+   **Hover**, junto a «↑ Padre», edita cómo se ve el elemento al pasar el ratón por encima: lo muestra en ese estado mientras ajustas y el CSS sale como `:hover`.
 4. Elige si el cambio se aplica a **todos los elementos con esa clase** o **solo a ese**.
 5. Pulsa **Copiar CSS** y pégalo al final de la hoja de estilos del prototipo.
 
@@ -22,9 +23,29 @@ Atajos: `Alt` arrastra sin imán · `Shift` va de 8 en 8 px · `Esc` suelta la s
 
 «Usar página» desactiva la selección para poder navegar el prototipo con normalidad.
 
+### Móvil y tableta
+
+Los botones **Escritorio · Tableta 768 · Móvil 375** del panel eligen para qué tamaño de pantalla ajustas. Funciona como Webflow:
+
+- **Escritorio** edita la página en la ventana real, y los cambios valen para todos los tamaños.
+- **Tableta** y **Móvil** muestran la página a 768 o 375 px dentro de un marco, y editas ahí. Los cambios se guardan dentro de su `@media` (`max-width: 1023px` y `max-width: 767px`) y valen para ese tamaño y los menores.
+
+El elemento seleccionado se mantiene al cambiar de tamaño. En la lista de cambios, los de tableta y móvil llevan su etiqueta, y el CSS copiado los agrupa en sus `@media` después de las reglas generales.
+
+«Antes», junto a Copiar CSS, muestra la página original sin tus cambios y oculta el panel, para enseñar la diferencia. «Volver a mis cambios» o `Esc` los vuelve a mostrar; no se pierde nada.
+
 ### El imán
 
 Como los prototipos no siempre tienen una escala de espaciado fija, al arrastrar el valor se «pega» a los espaciados que ya usa la página (márgenes, rellenos y gaps de todos sus elementos) cuando pasa a menos de 3 px. Así no aparecen valores sueltos como 17 px. El aviso «ya usado en la página» indica cuándo ha ocurrido.
+
+### Variables CSS
+
+Si el prototipo define variables (`--espacio-m: 16px`, `--azul: #2563eb`), el editor las aprovecha:
+
+- Sus longitudes también hacen de imán. Si el arrastre cae justo en el valor de una variable, el CSS usa `var(--espacio-m)` en lugar de los píxeles, y la etiqueta lo indica.
+- Junto a los colores de la pestaña Texto aparecen muestras con las variables de color. Pulsar una aplica `var(--azul)`.
+
+Solo se leen las hojas de estilo del mismo dominio; las de otro dominio no se pueden leer desde la página.
 
 ### Qué CSS se genera
 

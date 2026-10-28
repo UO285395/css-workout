@@ -16,6 +16,10 @@ const LABELS: Record<string, string> = {
   'justify-content': 'Reparto',
   'align-items': 'Alineación de los hijos',
   gap: 'Separación entre hijos',
+  'column-gap': 'Separación entre columnas',
+  'row-gap': 'Separación entre filas',
+  'grid-template-columns': 'Columnas',
+  'grid-column': 'Columnas que ocupa',
   'align-self': 'Posición en el contenedor',
   'justify-self': 'Posición en el contenedor',
 };
@@ -35,6 +39,8 @@ export const NUMERIC: Record<string, { min: number }> = {
   'line-height': { min: 0 },
   'letter-spacing': { min: -20 },
   gap: { min: 0 },
+  'column-gap': { min: 0 },
+  'row-gap': { min: 0 },
 };
 
 export const isFlex = (display: string) => display === 'flex' || display === 'inline-flex';
@@ -57,7 +63,9 @@ export function readValue(cs: CSSStyleDeclaration, prop: string): string {
       // "normal" depende de la fuente: se muestra vacío y el valor aproximado como pista.
       return v === 'normal' ? '' : String(Math.round(parseFloat(v)));
     case 'letter-spacing': return v === 'normal' ? '0' : String(Math.round(parseFloat(v) * 10) / 10);
-    case 'gap': return v === 'normal' ? '0' : String(Math.round(parseFloat(v)));
+    case 'gap':
+    case 'column-gap':
+    case 'row-gap': return v === 'normal' ? '0' : String(Math.round(parseFloat(v)));
     case 'color':
     case 'background-color': return rgbToHex(v);
     case 'text-align': return v === 'start' ? 'left' : v === 'end' ? 'right' : v;

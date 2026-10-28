@@ -3,6 +3,9 @@ import { measure, zoneRect, dragSign, SIDES, type BoxModel, type Rect, type Side
 import { collectSpacingValues, snap } from './snapping';
 import { selectorFor, defaultScope, classSelector, describe, type Scope } from './selector';
 import { UI_CSS } from './styles';
+import { collectVariables, lengthVar, type CssVariable } from './variables';
+import { trackSizes, gapRects } from './grid';
+import { SCREENS, screenFor, ruleKey, parseKey, type Screen } from './screens';
 import {
   styleLabel, readValue, originalValue, collectFonts, collectFontSizes, axisProp, isFlex, isGrid,
   isTransparent, NUMERIC, WEIGHTS,
@@ -18,6 +21,7 @@ const BLOCK_ONLY = ['width', 'height', 'margin-top', 'margin-bottom'];
 export const needsInlineBlock = (display: string, props: readonly string[]) =>
   display === 'inline' && props.some((p) => BLOCK_ONLY.includes(p));
 const STORAGE_PREFIX = 'css-workout:';
+const HELP = 'Arrastra una etiqueta subrayada para cambiar su valor\nArrastra con Alt: sin imán\nArrastra con Shift: de 8 en 8\nEsc: soltar la selección\nCtrl+Z / Ctrl+Shift+Z: deshacer y rehacer';
 
 const SIDE_LABEL: Record<Side, string> = { top: 'superior', right: 'derecho', bottom: 'inferior', left: 'izquierdo' };
 const KIND_LABEL: Record<Kind, string> = { margin: 'Margen', padding: 'Relleno' };
@@ -48,6 +52,55 @@ const place = (el: HTMLElement, r: Rect | null) => {
   el.style.height = `${Math.max(0, r.h)}px`;
 };
 
+/** Etiqueta del tamaño en la lista de cambios; escritorio no la lleva. */
+const screenTag = (key: string) => {
+  const { screen } = parseKey(key);
+  return screen.media ? `<span class="badge">${screen.label}</span> ` : '';
+};
+const FRAME_NAME = 'css-workout-frame';
+
+/** Posición de un elemento como índices de hijos desde <html>, para encontrarlo en la copia del marco. */
+const pathOf = (el: Element): number[] => {
+  const path: number[] = [];
+  for (let e: Element | null = el; e?.parentElement; e = e.parentElement) path.unshift(Array.from(e.parentElement.children).indexOf(e));
+  return path;
+};
+const resolvePath = (doc: Document, path: number[]): Element | null => {
+  let e: Element | null = doc.documentElement;
+  for (const i of path) e = e?.children[i] ?? null;
+  return e && e !== doc.documentElement ? e : null;
+};
+/** Hijos que ocupan sitio en el flujo, en el orden en que se ven (propiedad `order` y luego el HTML). */
+const orderedSiblings = (parent: Element): Element[] => Array.from(parent.children)
+  .map((el, i) => ({ el, i, cs: getComputedStyle(el) }))
+  .filter(({ cs }) => cs.display !== 'none' && cs.position !== 'absolute' && cs.position !== 'fixed')
+  .sort((a, b) => (Number(a.cs.order) || 0) - (Number(b.cs.order) || 0) || a.i - b.i)
+  .map(({ el }) => el);
+const HOVER_CLASS = 'cssw-hover';
+const withForcedHover = (sel: string) => (sel.includes(':hover') ? `${sel}, ${sel.replace(/:hover/g, `.${HOVER_CLASS}`)}` : sel);
+
+/** Copia de las reglas :hover de la página para la clase que fuerza ese estado. */
+function hoverRulesCopy(doc: Document): string {
+  const out: string[] = [];
+  const walk = (rules: CSSRuleList) => {
+    for (const r of Array.from(rules)) {
+      const style = r as CSSStyleRule;
+      const group = r as CSSGroupingRule & { conditionText?: string };
+      if (style.selectorText?.includes(':hover')) {
+        out.push(`${style.selectorText.replace(/:hover/g, `.${HOVER_CLASS}`)} { ${style.style.cssText} }`);
+      } else if (group.cssRules && group.conditionText != null && r.cssText.startsWith('@media')) {
+        const start = out.length;
+        walk(group.cssRules);
+        if (out.length > start) out.splice(start, out.length - start, `@media ${group.conditionText} { ${out.slice(start).join(' ')} }`);
+      }
+    }
+  };
+  for (const sheet of Array.from(doc.styleSheets)) {
+    if ((sheet.ownerNode as Element | null)?.id?.startsWith('css-workout')) continue;
+    try { walk(sheet.cssRules); } catch { /* hoja de otro dominio: no se puede leer */ }
+  }
+  return out.join('\n');
+}
 const escapeHtml = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
 
 interface Drag {
@@ -59,7 +112,8 @@ interface Drag {
   display: { before: Entry | null } | null;
   start: number[];
   pointer: { x: number; y: number };
-  compute: (dx: number, dy: number, e: PointerEvent) => { values: number[]; snapped: boolean };
+  /** `vars`: la variable CSS que vale lo mismo que cada valor, si el imán ha caído en una. */
+  compute: (dx: number, dy: number, e: PointerEvent) => { values: number[]; snapped: boolean; vars?: (string | undefined)[] };
 }
 
 /**
@@ -104,10 +158,20 @@ function textFitsBox(el: Element, cs: CSSStyleDeclaration): boolean {
   const px = (v: string) => parseFloat(v) || 0;
   const content = el.getBoundingClientRect().width - px(cs.paddingLeft) - px(cs.paddingRight)
     - px(cs.borderLeftWidth) - px(cs.borderRightWidth);
+  // Se mide cada línea de texto: si alguna deja hueco (un título corto dentro de una tarjeta,
+  // la última línea de un párrafo), alinear sí se nota.
+  const lines = new Map<number, number>();
   const range = el.ownerDocument.createRange();
-  range.selectNodeContents(el);
-  const text = range.getBoundingClientRect().width;
-  return text > 0 && content - text < 1;
+  const walker = el.ownerDocument.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    if (!n.textContent!.trim()) continue;
+    range.selectNodeContents(n);
+    for (const r of Array.from(range.getClientRects())) {
+      const top = Math.round(r.top);
+      lines.set(top, (lines.get(top) ?? 0) + r.width);
+    }
+  }
+  return lines.size > 0 && Array.from(lines.values()).every((w) => content - w < 1);
 }
 
 export class Editor {
@@ -115,7 +179,6 @@ export class Editor {
 
   private host: HTMLElement;
   private root: ShadowRoot;
-  private previewStyle: HTMLStyleElement;
   private layer: HTMLElement;
   private panel: HTMLElement;
 
@@ -127,11 +190,32 @@ export class Editor {
   private candidates: number[] = [];
   private fontSizes: number[] = [];
   private fonts: string[] = [];
+  private vars: CssVariable[] = [];
   /** Valor previo de un color mientras se elige en el selector, para apuntarlo como un solo paso. */
   private colorBefore = new Map<string, Entry | null>();
   private drag: Drag | null = null;
   private frame = 0;
   private cssOpen = false;
+  /** Mostrando la página original: los cambios siguen guardados, solo se apaga la vista previa. */
+  private comparing = false;
+  /** Tamaño de pantalla según el ancho de la ventana: decide en qué @media van los cambios. */
+  private screen: Screen;
+  /** Documento que se edita: la propia página o, en móvil y tableta, la copia dentro del marco. */
+  private page: Document;
+  /** Marco con la página a otro ancho (móvil o tableta); null cuando se edita la ventana real. */
+  private frameScreen: Screen | null = null;
+  private stage!: HTMLElement;
+  private iframe: HTMLIFrameElement | null = null;
+  /** Capa de contornos y tiradores; en el marco se desplaza para coincidir con él. */
+  private ovRoot!: HTMLElement;
+  /** Una hoja de vista previa por documento (la página y, si está abierto, el marco). */
+  private previews = new Set<HTMLStyleElement>();
+  /** Editando cómo se ve al pasar el ratón: los elementos afectados se fuerzan a ese estado. */
+  private hoverState = false;
+  private forced = new Set<Element>();
+  private comparePill!: HTMLButtonElement;
+  /** Pestaña y selector dibujados por última vez, para conservar el desplazamiento. */
+  private tabView = '';
   private storageKey: string;
 
   private ov!: {
@@ -140,36 +224,40 @@ export class Editor {
     zones: Record<Kind, Record<Side, HTMLElement>>;
     size: { w: HTMLElement; h: HTMLElement; wh: HTMLElement };
     twins: HTMLElement[];
+    gaps: HTMLElement[];
   };
 
   constructor(private doc: Document = document) {
+    this.page = doc;
     this.storageKey = STORAGE_PREFIX + doc.location.pathname;
+    this.screen = screenFor(this.viewportWidth());
 
     this.host = doc.createElement('css-workout');
     this.host.setAttribute('style', 'all:initial;position:fixed;inset:0;z-index:2147483647;pointer-events:none;');
     this.root = this.host.attachShadow({ mode: 'open' });
     h('style', '', this.root).textContent = UI_CSS;
     this.layer = h('div', 'layer', this.root);
+    this.stage = h('div', 'stage', this.layer);
+    this.ovRoot = h('div', 'ov-root', this.layer);
     this.buildOverlay();
     this.panel = h('div', 'panel', this.layer);
     this.buildPanel();
+    this.comparePill = h('button', 'compare-pill', this.layer);
+    this.comparePill.innerHTML = '<span class="muted">Viendo el original</span> <b>Volver a mis cambios</b>';
+    this.comparePill.title = 'Volver a mostrar tus cambios (Esc)';
+    this.comparePill.addEventListener('click', () => this.setComparing(false));
     doc.documentElement.appendChild(this.host);
-
-    this.previewStyle = doc.createElement('style');
-    this.previewStyle.id = 'css-workout-preview';
-    doc.head.appendChild(this.previewStyle);
 
     this.restore();
     this.store.onChange(() => {
-      this.previewStyle.textContent = this.store.toCss({ important: true });
+      if (this.store.size === 0 && this.comparing) this.setComparing(false);
+      this.updatePreviews();
       this.persist();
       this.renderPanel();
     });
-    this.previewStyle.textContent = this.store.toCss({ important: true });
-
-    doc.addEventListener('mousemove', this.onMouseMove, true);
-    doc.addEventListener('click', this.onClick, true);
+    this.attachPage(doc);
     doc.addEventListener('keydown', this.onKeyDown, true);
+    doc.defaultView?.addEventListener('resize', this.onResize);
     this.collectAll();
     this.renderPanel();
     this.loop();
@@ -177,11 +265,114 @@ export class Editor {
 
   destroy(): void {
     cancelAnimationFrame(this.frame);
-    this.doc.removeEventListener('mousemove', this.onMouseMove, true);
-    this.doc.removeEventListener('click', this.onClick, true);
+    this.detachPage(this.page);
+    if (this.page !== this.doc) this.detachPage(this.doc);
     this.doc.removeEventListener('keydown', this.onKeyDown, true);
+    this.doc.defaultView?.removeEventListener('resize', this.onResize);
     this.host.remove();
-    this.previewStyle.remove();
+  }
+
+  /** Empieza a escuchar y previsualizar en un documento (la página o la del marco). */
+  private attachPage(page: Document): void {
+    const style = page.createElement('style');
+    style.id = 'css-workout-preview';
+    page.head.appendChild(style);
+    this.previews.add(style);
+    this.updatePreviews();
+    page.addEventListener('mousemove', this.onMouseMove, true);
+    page.addEventListener('click', this.onClick, true);
+    if (page !== this.doc) page.addEventListener('keydown', this.onKeyDown, true);
+  }
+
+  private detachPage(page: Document): void {
+    for (const el of this.forced) if (el.ownerDocument === page) { el.classList.remove(HOVER_CLASS); this.forced.delete(el); }
+    page.getElementById('css-workout-hover')?.remove();
+    page.removeEventListener('mousemove', this.onMouseMove, true);
+    page.removeEventListener('click', this.onClick, true);
+    if (page !== this.doc) page.removeEventListener('keydown', this.onKeyDown, true);
+    for (const st of this.previews) if (st.ownerDocument === page) { st.remove(); this.previews.delete(st); }
+  }
+
+  private updatePreviews(): void {
+    // Las reglas :hover también se aplican a los elementos forzados con la clase cssw-hover.
+    const css = this.store.toCss({ important: true, mapSelector: withForcedHover });
+    for (const st of this.previews) {
+      st.textContent = css;
+      st.media = this.comparing ? 'not all' : '';
+    }
+  }
+
+  /**
+   * Fuerza el estado «al pasar el ratón» en los elementos afectados: les pone la clase cssw-hover
+   * y copia las reglas :hover del prototipo para esa clase (un script no puede activar :hover).
+   */
+  private syncForcedHover(): void {
+    const want = new Set(this.hoverState && this.selected && !this.comparing ? [this.selected, ...this.matches()] : []);
+    for (const el of this.forced) if (!want.has(el)) el.classList.remove(HOVER_CLASS);
+    for (const el of want) if (!this.forced.has(el)) el.classList.add(HOVER_CLASS);
+    this.forced = want;
+    let copy = this.page.getElementById('css-workout-hover');
+    if (want.size && !copy) {
+      copy = this.page.createElement('style');
+      copy.id = 'css-workout-hover';
+      copy.textContent = hoverRulesCopy(this.page);
+      // Antes de la vista previa, para que los cambios del usuario ganen.
+      this.page.head.insertBefore(copy, Array.from(this.previews).find((st) => st.ownerDocument === this.page) ?? null);
+    } else if (!want.size && copy) copy.remove();
+  }
+
+  /**
+   * Móvil o tableta: muestra la página a ese ancho en un marco y edita dentro de él, para que sus
+   * @media se apliquen de verdad. Escritorio vuelve a la ventana real.
+   */
+  private setFrameScreen(screen: Screen | null): void {
+    if (screen === this.frameScreen) return;
+    const path = this.selected ? pathOf(this.selected) : null;
+    this.frameScreen = screen;
+    this.hovered = null;
+    this.selected = null;
+    if (this.page !== this.doc) this.detachPage(this.page);
+    this.page = this.doc;
+    this.iframe?.remove();
+    this.iframe = null;
+    this.layer.classList.toggle('framed', !!screen);
+    if (!screen) {
+      this.screen = screenFor(this.viewportWidth());
+      if (path) this.select(resolvePath(this.doc, path));
+      else this.renderPanel();
+      return;
+    }
+    this.screen = screen;
+    const frame = h('iframe', 'frame');
+    // Con este nombre el script, si el prototipo lo carga por su cuenta, no abre otro editor dentro.
+    // Tiene que ir antes de insertar el marco: después ya no cambia el nombre de su ventana.
+    frame.name = FRAME_NAME;
+    this.stage.appendChild(frame);
+    frame.title = `Página a ${screen.width} px`;
+    frame.style.width = `${screen.width}px`;
+    frame.addEventListener('load', () => {
+      const page = frame.contentDocument;
+      if (!page || frame !== this.iframe) return;
+      if (this.page !== this.doc) this.detachPage(this.page);
+      this.page = page;
+      this.attachPage(page);
+      this.selected = null;
+      this.collectAll();
+      if (path) { const el = resolvePath(page, path); if (el) this.select(el); }
+      this.renderPanel();
+    });
+    frame.src = this.doc.location.href;
+    this.iframe = frame;
+    this.stage.dataset.label = `${screen.label} · ${screen.width} px`;
+    this.renderPanel();
+  }
+
+  /** En el marco, la capa de contornos se coloca encima de él (sus coordenadas son las del marco). */
+  private placeOverlayRoot(): void {
+    const st = this.ovRoot.style;
+    if (!this.iframe || this.page === this.doc) { st.cssText = ''; return; }
+    const r = this.iframe.getBoundingClientRect();
+    st.cssText = `position:fixed;left:${r.left}px;top:${r.top}px;width:${r.width}px;height:${r.height}px;transform:translateZ(0);overflow:hidden;`;
   }
 
   /** CSS listo para copiar, con el valor anterior como comentario. */
@@ -192,20 +383,31 @@ export class Editor {
   }
 
   select(el: Element | null): void {
+    if (el !== this.selected) this.hoverState = false;
     this.selected = el;
     if (el) this.scope = defaultScope(el);
     this.collectAll();
     this.renderPanel();
   }
 
+  /** Clave de la regla donde se guardan los cambios: el selector y, fuera de escritorio, su @media. */
   get selector(): string | null {
+    return this.selected ? ruleKey(this.ruleSelector!, this.screen) : null;
+  }
+
+  /** Selector de la regla tal como saldrá en el CSS, con `:hover` si se edita ese estado. */
+  get ruleSelector(): string | null {
+    return this.cssSelector && (this.hoverState ? `${this.cssSelector}:hover` : this.cssSelector);
+  }
+
+  get cssSelector(): string | null {
     return this.selected ? selectorFor(this.selected, this.scope) : null;
   }
 
   // ---------- Overlay ----------
 
   private buildOverlay(): void {
-    const L = this.layer;
+    const L = this.ovRoot;
     const areas = {} as Record<Kind, Record<Side, HTMLElement>>;
     const zones = {} as Record<Kind, Record<Side, HTMLElement>>;
     for (const kind of ['margin', 'padding'] as Kind[]) {
@@ -233,8 +435,8 @@ export class Editor {
 
     this.ov = {
       hover: h('div', 'hover', L), hoverTag: h('div', 'hover-tag', L),
-      sel: h('div', 'sel', L), dims: h('div', 'dims', L), tip: h('div', 'tip', L),
-      areas, zones, size, twins: [],
+      sel: h('div', 'sel', L), dims: h('div', 'dims', L), tip: h('div', 'tip', this.layer),
+      areas, zones, size, twins: [], gaps: [],
     };
     this.ov.tip.style.display = 'none';
   }
@@ -246,6 +448,8 @@ export class Editor {
 
   private renderOverlay(): void {
     const ov = this.ov;
+    this.placeOverlayRoot();
+    this.syncForcedHover();
     const showHover = this.active && this.hovered && this.hovered !== this.selected && !this.drag;
     if (showHover) {
       const r = this.hovered!.getBoundingClientRect();
@@ -282,6 +486,7 @@ export class Editor {
     }
     this.placeSizeHandles(sizing ? box : null);
     this.renderTwins(el);
+    this.renderGridGaps(this.mode === 'layout' ? el : null);
   }
 
   private placeSizeHandles(box: BoxModel | null): void {
@@ -294,10 +499,45 @@ export class Editor {
     wh.style.left = `${b.x + b.w - 6}px`; wh.style.top = `${b.y + b.h - 6}px`;
   }
 
+  /** En una cuadrícula, los huecos entre columnas y filas se ven y se arrastran para cambiar la separación. */
+  private renderGridGaps(el: Element | null): void {
+    const cs = el ? getComputedStyle(el) : null;
+    let rects: { r: Rect; prop: 'column-gap' | 'row-gap' }[] = [];
+    if (el && cs && isGrid(cs.display)) {
+      const box = measure(el);
+      const origin = { x: box.border.x + box.borderWidth.left + box.padding.left, y: box.border.y + box.borderWidth.top + box.padding.top };
+      const g = gapRects(trackSizes(cs.gridTemplateColumns), trackSizes(cs.gridTemplateRows),
+        parseFloat(cs.columnGap) || 0, parseFloat(cs.rowGap) || 0, origin, HIT_MIN);
+      rects = [...g.columns.map((r) => ({ r, prop: 'column-gap' as const })), ...g.rows.map((r) => ({ r, prop: 'row-gap' as const }))];
+    }
+    while (this.ov.gaps.length < rects.length) {
+      const z = h('div', 'grid-gap', this.ovRoot);
+      z.addEventListener('pointerdown', (e) => this.startGapDrag(e, z.dataset.prop as 'column-gap' | 'row-gap'));
+      this.ov.gaps.push(z);
+    }
+    this.ov.gaps.forEach((z, i) => {
+      const it = rects[i];
+      if (!it) return place(z, null);
+      z.dataset.prop = it.prop;
+      z.className = `grid-gap ${it.prop === 'column-gap' ? 'x' : 'y'}`;
+      z.title = `${propLabel(it.prop)}: arrastra para ajustar`;
+      place(z, it.r);
+    });
+  }
+
+  private startGapDrag(e: PointerEvent, prop: 'column-gap' | 'row-gap'): void {
+    if (!this.selected) return;
+    const start = parseFloat(getComputedStyle(this.selected).getPropertyValue(prop)) || 0;
+    this.beginDrag(e, [prop], [start], (dx, dy, ev) => {
+      const r = snap(start + (prop === 'column-gap' ? dx : dy), this.candidates, { free: ev.altKey, coarse: ev.shiftKey, min: 0 });
+      return { values: [r.value], snapped: r.snapped, vars: [this.varFor(r.value, r.snapped && !ev.altKey)] };
+    });
+  }
+
   /** Con ámbito "por clase", marca con línea discontinua el resto de elementos afectados. */
   private renderTwins(el: Element): void {
     const twins = this.scope === 'class' ? this.matches().filter((m) => m !== el).slice(0, 50) : [];
-    while (this.ov.twins.length < twins.length) this.ov.twins.push(h('div', 'twin', this.layer));
+    while (this.ov.twins.length < twins.length) this.ov.twins.push(h('div', 'twin', this.ovRoot));
     this.ov.twins.forEach((t, i) => {
       const m = twins[i];
       if (!m) return place(t, null);
@@ -315,12 +555,13 @@ export class Editor {
     }
     this.placeSizeHandles(null);
     for (const t of this.ov.twins) place(t, null);
+    this.renderGridGaps(null);
   }
 
   private matches(): Element[] {
-    const sel = this.selector;
+    const sel = this.cssSelector;
     if (!sel) return [];
-    try { return Array.from(this.doc.querySelectorAll(sel)); } catch { return []; }
+    try { return Array.from(this.page.querySelectorAll(sel)); } catch { return []; }
   }
 
   // ---------- Arrastre ----------
@@ -333,7 +574,7 @@ export class Editor {
     this.beginDrag(e, [prop], [start], (dx, dy, ev) => {
       const raw = start + sign * (axis === 'x' ? dx : dy);
       const r = snap(raw, this.candidates, { free: ev.altKey, coarse: ev.shiftKey, min: 0 });
-      return { values: [r.value], snapped: r.snapped };
+      return { values: [r.value], snapped: r.snapped, vars: [this.varFor(r.value, r.snapped && !ev.altKey)] };
     });
   }
 
@@ -379,13 +620,14 @@ export class Editor {
   private onDragMove(e: PointerEvent): void {
     const d = this.drag;
     if (!d) return;
-    const { values, snapped } = d.compute(e.clientX - d.pointer.x, e.clientY - d.pointer.y, e);
+    const { values, snapped, vars } = d.compute(e.clientX - d.pointer.x, e.clientY - d.pointer.y, e);
     if (d.display) this.store.preview(d.selector, 'display', 'inline-block', 'inline');
-    d.props.forEach((p, i) => this.store.preview(d.selector, p, `${values[i]}px`, d.originals[i]));
+    d.props.forEach((p, i) => this.store.preview(d.selector, p, vars?.[i] ? `var(${vars[i]})` : `${values[i]}px`, d.originals[i]));
     const tip = this.ov.tip;
     tip.style.display = '';
+    const named = vars?.find(Boolean);
     tip.innerHTML = d.props.map((p, i) => `${propLabel(p)}: <b>${values[i]}px</b>`).join(' · ') +
-      (snapped ? ' <span class="snap">· ya usado en la página</span>' : '');
+      (named ? ` <span class="snap">· ${escapeHtml(named)}</span>` : snapped ? ' <span class="snap">· ya usado en la página</span>' : '');
     tip.style.left = `${e.clientX + 14}px`;
     tip.style.top = `${e.clientY + 14}px`;
   }
@@ -406,16 +648,36 @@ export class Editor {
     return target === this.host;
   }
 
+  /** Antes y después: apaga la vista previa y oculta toda la interfaz salvo el botón para volver. */
+  private setComparing(on: boolean): void {
+    if (on && this.store.size === 0) return;
+    this.comparing = on;
+    this.updatePreviews();
+    this.layer.classList.toggle('comparing', on);
+    if (on) this.hovered = null;
+  }
+
+  private viewportWidth(): number {
+    if (this.frameScreen) return this.frameScreen.width;
+    return this.page.documentElement.clientWidth || this.page.defaultView?.innerWidth || 1280;
+  }
+
+  private onResize = () => {
+    if (this.frameScreen) return;
+    const screen = screenFor(this.viewportWidth());
+    if (screen !== this.screen) { this.screen = screen; this.renderPanel(); }
+  };
+
   private onMouseMove = (e: MouseEvent) => {
-    if (!this.active || this.drag) return;
+    if (!this.active || this.drag || this.comparing) return;
     const t = e.target as Element | null;
-    this.hovered = !t || this.isOwn(t) || t === this.doc.documentElement ? null : t;
+    this.hovered = !t || this.isOwn(t) || t === this.page.documentElement ? null : t;
   };
 
   private onClick = (e: MouseEvent) => {
-    if (!this.active || this.isOwn(e.target)) return;
+    if (!this.active || this.comparing || this.isOwn(e.target)) return;
     const t = e.target as Element;
-    if (t === this.doc.documentElement) return;
+    if (t === this.page.documentElement) return;
     // Mientras se edita, un clic selecciona en vez de seguir enlaces o pulsar botones del prototipo.
     e.preventDefault();
     e.stopPropagation();
@@ -426,6 +688,10 @@ export class Editor {
     const inField = this.isOwn(e.target) && this.root.activeElement instanceof HTMLInputElement;
     if (inField) return;
     const mod = e.ctrlKey || e.metaKey;
+    if (this.comparing) {
+      if (e.key === 'Escape') { this.setComparing(false); e.preventDefault(); }
+      return;
+    }
     if (e.key === 'Escape' && this.selected) { this.select(null); e.preventDefault(); return; }
     if (!this.active || this.isTyping(e.target)) return;
     if (mod && e.key.toLowerCase() === 'z') {
@@ -443,11 +709,15 @@ export class Editor {
   }
 
   private collectAll(): void {
-    const root = this.doc.body ?? this.doc.documentElement;
+    const root = this.page.body ?? this.page.documentElement;
     const ignore = (el: Element) => el === this.host;
     this.candidates = collectSpacingValues(root, ignore);
     this.fontSizes = collectFontSizes(root, ignore);
     this.fonts = collectFonts(root, ignore);
+    this.vars = collectVariables(this.page);
+    // Los valores de las variables de longitud también hacen de imán.
+    const lengths = this.vars.filter((v) => v.kind === 'length' && v.px! > 0).map((v) => v.px!);
+    this.candidates = Array.from(new Set([...this.candidates, ...lengths])).sort((a, b) => a - b);
   }
 
   // ---------- Persistencia (por URL, en este navegador) ----------
@@ -468,17 +738,18 @@ export class Editor {
   private buildPanel(): void {
     this.panel.innerHTML = `
       <div class="head">
-        <span class="title">CSS Workout</span>
+        <span class="title" data-part="title">CSS Workout</span>
         <div class="toggle" title="Mientras editas, los clics seleccionan elementos en vez de usar el prototipo">
           <button data-act="on">Editar</button><button data-act="off">Usar página</button>
         </div>
         <button class="icon" data-act="side" title="Mover el panel al otro lado">⇆</button>
         <button class="icon" data-act="min" title="Minimizar">—</button>
+        <div class="toggle screens" data-part="screens">${SCREENS.map((sc) =>
+          `<button data-act="screen" data-value="${sc.id}" title="${sc.media ? `Ver y editar la página a ${sc.width} px. Los cambios valen para ${sc.label.toLowerCase()} y tamaños menores.` : 'Editar la página en la ventana real. Los cambios valen para todos los tamaños.'}">${sc.label}${sc.media ? ` <span class="px">${sc.width}</span>` : ''}</button>`).join('')}</div>
       </div>
       <div class="body">
-        <div data-part="selection"></div>
-        <div data-part="changes"></div>
-        <div class="muted">Alt: sin imán · Shift: de 8 en 8 · Esc: soltar selección · Ctrl+Z: deshacer</div>
+        <div class="selection" data-part="selection"></div>
+        <div class="foot" data-part="changes"></div>
       </div>`;
     this.panel.addEventListener('click', (e) => this.onPanelClick(e));
     this.panel.addEventListener('change', (e) => this.onPanelChange(e));
@@ -502,11 +773,16 @@ export class Editor {
     switch (act) {
       case 'on': this.active = true; break;
       case 'off': this.active = false; this.hovered = null; break;
-      case 'side': this.panel.classList.toggle('left'); break;
+      case 'side': this.layer.classList.toggle('panel-left', this.panel.classList.toggle('left')); break;
+      case 'screen': {
+        const sc = SCREENS.find((x) => x.id === btn.dataset.value)!;
+        this.setFrameScreen(sc.media ? sc : null);
+        return;
+      }
       case 'min': this.panel.classList.toggle('min'); break;
       case 'parent': {
         const p = this.selected?.parentElement;
-        if (p && p !== this.doc.documentElement) this.select(p);
+        if (p && p !== this.page.documentElement) this.select(p);
         break;
       }
       case 'deselect': this.select(null); break;
@@ -519,6 +795,14 @@ export class Editor {
         else this.commit(btn.dataset.prop!, btn.dataset.value!);
         break;
       case 'children': this.setChildren(btn.dataset.value!); break;
+      case 'order': this.reorder(btn.dataset.value!); break;
+      case 'grid-cols': this.setGridColumns(Number(btn.dataset.value)); break;
+      case 'hover':
+        this.hoverState = !this.hoverState;
+        this.tabView = '';
+        // En el acto, sin esperar al siguiente frame: quien mire el elemento justo después ya lo ve en su estado.
+        this.syncForcedHover();
+        break;
       case 'scope-class': this.scope = 'class'; break;
       case 'scope-element': this.scope = 'element'; break;
       case 'undo': this.store.undo(); break;
@@ -528,6 +812,7 @@ export class Editor {
         if (confirm('¿Descartar todos los cambios?')) this.store.clear();
         break;
       case 'copy': void this.copy(btn); return;
+      case 'compare': this.setComparing(true); return;
     }
     this.renderPanel();
   }
@@ -603,10 +888,18 @@ export class Editor {
     const selector = this.selector!;
     const cs = getComputedStyle(this.selected);
     const orig = (prop: string) => this.store.get(selector, prop)?.original ?? cs.getPropertyValue(prop);
+    if (how === 'grid') {
+      const n = Math.min(3, Math.max(1, this.selected.children.length));
+      this.store.setMany(selector, [
+        { prop: 'display', value: 'grid', original: orig('display') },
+        { prop: 'grid-template-columns', value: `repeat(${n}, 1fr)`, original: orig('grid-template-columns') },
+      ]);
+      return;
+    }
     if (how === 'normal') {
-      const items = ['display', 'flex-direction'].filter((p) => this.store.get(selector, p));
+      const items = ['display', 'flex-direction', 'grid-template-columns'].filter((p) => this.store.get(selector, p));
       // Si la página ya lo tenía en fila o columna, "uno debajo de otro" es volver a bloque.
-      if (items.length === 0) return isFlex(cs.display) ? this.commit('display', 'block') : undefined;
+      if (items.length === 0) return isFlex(cs.display) || isGrid(cs.display) ? this.commit('display', 'block') : undefined;
       // Volver a la caja original es quitar los cambios de display y dirección.
       this.store.setMany(selector, items.map((p) => ({ prop: p, value: orig(p), original: orig(p) })));
       return;
@@ -638,12 +931,17 @@ export class Editor {
     const raw = readValue(cs, prop);
     const start = raw === '' ? Math.round(parseFloat(cs.fontSize) * 1.2) : Number(raw);
     const min = NUMERIC[prop]?.min ?? 0;
-    const candidates = prop === 'font-size' ? this.fontSizes : prop === 'gap' ? this.candidates : [];
+    const candidates = prop === 'font-size' ? this.fontSizes : prop.endsWith('gap') ? this.candidates : [];
     // Cada 2 px de ratón cambian 1 px de valor: más preciso que 1:1 en valores pequeños.
     this.beginDrag(e, [prop], [start], (dx, _dy, ev) => {
       const r = snap(start + dx / 2, candidates, { free: ev.altKey, coarse: ev.shiftKey, min });
-      return { values: [r.value], snapped: r.snapped };
+      return { values: [r.value], snapped: r.snapped, vars: [this.varFor(r.value, r.snapped && !ev.altKey && prop !== 'line-height')] };
     });
+  }
+
+  /** Nombre de la variable de longitud que vale `px`, solo si el imán ha caído en ese valor. */
+  private varFor(px: number, snapped: boolean): string | undefined {
+    return snapped ? lengthVar(this.vars, px)?.name : undefined;
   }
 
   private async copy(btn: HTMLButtonElement): Promise<void> {
@@ -665,6 +963,12 @@ export class Editor {
     const q = (s: string) => this.panel.querySelector(s) as HTMLElement;
     q('[data-act="on"]').classList.toggle('on', this.active);
     q('[data-act="off"]').classList.toggle('on', !this.active);
+    q('[data-part="title"]').title = `Editando a ${this.viewportWidth()} px: ${this.screen.media
+      ? `los cambios se guardan solo para ${this.screen.label.toLowerCase()} y tamaños menores (@media ${this.screen.media})`
+      : 'los cambios valen para todos los tamaños'}\n\n${HELP}`;
+    for (const b of Array.from(this.panel.querySelectorAll<HTMLElement>('[data-act="screen"]'))) {
+      b.classList.toggle('on', b.dataset.value === this.screen.id);
+    }
     this.renderSelectionPart(q('[data-part="selection"]'));
     this.renderChangesPart(q('[data-part="changes"]'));
   }
@@ -673,7 +977,8 @@ export class Editor {
     const el = this.selected;
     const focused = this.root.activeElement;
     if (!el) {
-      part.innerHTML = `<div class="empty">${this.active ? 'Haz clic en un elemento de la página para ajustarlo.' : 'Pulsa «Editar» para seleccionar elementos.'}</div>`;
+      part.innerHTML = `<div class="tab"><div class="empty">${this.active ? 'Haz clic en un elemento de la página para ajustarlo.' : 'Pulsa «Editar» para seleccionar elementos.'}</div>
+        <ul class="muted help">${HELP.split('\n').map((l) => `<li>${l}</li>`).join('')}</ul></div>`;
       return;
     }
     // No se reconstruye mientras el usuario escribe en un campo o arrastra, para no perder el foco.
@@ -685,15 +990,21 @@ export class Editor {
     }
     const selector = this.selector!;
     const cls = classSelector(el);
-    const count = cls ? this.doc.querySelectorAll(cls).length : 0;
+    const count = cls ? this.page.querySelectorAll(cls).length : 0;
     const box = measure(el);
     const inline = box.display === 'inline';
     const input = (prop: string, value: number) =>
       `<input type="number" min="0" data-prop="${prop}" value="${value}" class="${this.store.get(selector, prop) ? 'changed' : ''}" aria-label="${propLabel(prop)}">`;
 
+    // Al redibujar la misma pestaña se conserva el desplazamiento, para no saltar arriba tras cada clic.
+    const view = `${this.mode}|${selector}`;
+    const scroll = view === this.tabView ? part.querySelector('.tab')?.scrollTop ?? 0 : 0;
+    this.tabView = view;
     part.innerHTML = `
-      <div class="row"><b class="mono">${escapeHtml(describe(el))}</b>
+      <div class="sel-head">
+      <div class="row nowrap"><b class="mono el-name" title="${escapeHtml(describe(el))}">${escapeHtml(describe(el))}</b>
         <span style="flex:1"></span>
+        <button data-act="hover" class="${this.hoverState ? 'on-state' : ''}" aria-pressed="${this.hoverState}" title="Editar cómo se ve al pasar el ratón por encima (:hover)">Hover</button>
         <button data-act="parent" title="Seleccionar el contenedor">↑ Padre</button>
         <button data-act="deselect" title="Soltar selección (Esc)">✕</button>
       </div>
@@ -708,8 +1019,12 @@ export class Editor {
         <button data-act="mode-text" class="${this.mode === 'text' ? 'on' : ''}">Texto</button>
         <button data-act="mode-layout" class="${this.mode === 'layout' ? 'on' : ''}">Alineación</button>
       </div>
+      </div>
+      <div class="tab">
       ${this.mode === 'text' ? this.textSection(el, selector) : this.mode === 'layout' ? this.layoutSection(el, selector) : this.boxSection(el, selector, box, inline, input)}
-      <div class="muted mono" title="Selector al que se aplicarán los cambios">${escapeHtml(selector)}</div>`;
+      <div class="muted mono" title="Selector al que se aplicarán los cambios">${escapeHtml(this.ruleSelector!)}${this.screen.media ? ` · solo ${this.screen.label.toLowerCase()} y menores` : ''}</div>
+      </div>`;
+    part.querySelector('.tab')!.scrollTop = scroll;
   }
 
   private boxSection(_el: Element, _selector: string, box: BoxModel, inline: boolean, input: (prop: string, value: number) => string): string {
@@ -746,9 +1061,14 @@ export class Editor {
   private colorField(prop: string, cs: CSSStyleDeclaration): string {
     const changed = this.store.get(this.selector!, prop) ? 'changed' : '';
     const none = !this.store.get(this.selector!, prop) && isTransparent(cs.getPropertyValue(prop));
+    // Con variables de color en la página, se ofrecen como muestras en lugar del código del color.
+    const colors = this.vars.filter((v) => v.kind === 'color').slice(0, 7);
+    const current = this.store.get(this.selector!, prop)?.value;
+    const hex = none ? 'sin color' : readValue(cs, prop);
+    const swatches = colors.map((v) => `<button class="swatch${current === `var(${v.name})` ? ' on' : ''}" data-act="set" data-prop="${prop}" data-value="var(${escapeHtml(v.name)})" title="${escapeHtml(v.name)}: ${escapeHtml(v.value)}" aria-label="${escapeHtml(v.name)}" style="background:${escapeHtml(v.value)}"></button>`).join('');
     return `<span>${styleLabel(prop)}</span>
-      <span class="row"><input type="color" data-prop="${prop}" value="${none ? '#ffffff' : readValue(cs, prop)}" class="${changed}" aria-label="${styleLabel(prop)}">
-      ${none ? '<span class="muted">sin color</span>' : `<code>${readValue(cs, prop)}</code>`}</span>`;
+      <span class="row nowrap"><input type="color" data-prop="${prop}" value="${none ? '#ffffff' : readValue(cs, prop)}" class="${changed}" aria-label="${styleLabel(prop)}" title="${hex}">
+      ${colors.length ? `<span class="swatches">${swatches}</span>` : none ? '<span class="muted">sin color</span>' : `<code>${hex}</code>`}</span>`;
   }
 
   private textSection(el: Element, _selector: string): string {
@@ -760,7 +1080,6 @@ export class Editor {
     const weightChanged = this.store.get(this.selector!, 'font-weight') ? 'changed' : '';
     const lineHint = String(Math.round(parseFloat(cs.fontSize) * 1.2));
     return `
-      <div class="muted">Arrastra sobre el nombre de un valor para ajustarlo</div>
       <div class="form">
         ${this.numberField('font-size', readValue(cs, 'font-size'))}
         <span>Grosor</span>
@@ -775,19 +1094,93 @@ export class Editor {
         ${this.colorField('color', cs)}
         ${this.colorField('background-color', cs)}
       </div>
-      <div class="row"><span class="muted">Alinear texto</span>
+      <div class="field"><span>Alinear texto</span>
         ${this.choice('text-align', readValue(cs, 'text-align'), [['left', 'Izquierda'], ['center', 'Centro'], ['right', 'Derecha'], ['justify', 'Justificado']])}
       </div>
       ${textFitsBox(el, cs) ? (inTextLine(el)
         ? `<div class="warn" data-hint="text-align">Este elemento forma parte de una línea de texto. Para alinearlo, pulsa «↑ Padre» y alinea el párrafo entero.</div>`
-        : `<div class="hint-box" data-hint="text-align">Este elemento mide lo mismo que su texto: al alinear se moverá el elemento entero dentro de su contenedor.</div>`) : ''}
+        : `<div class="hint-box" data-hint="text-align">Mide lo mismo que su texto: al alinear se moverá el elemento entero dentro de su contenedor.</div>`) : ''}
       <div class="row">
         ${this.choice('font-style', cs.fontStyle === 'italic' ? 'italic' : 'normal', [['normal', 'Normal'], ['italic', '<i>Cursiva</i>']])}
         ${this.choice('text-decoration-line', cs.textDecorationLine.includes('underline') ? 'underline' : 'none', [['none', 'Sin subrayar'], ['underline', '<u>Subrayado</u>']])}
       </div>
-      <div class="row"><span class="muted">Mayúsculas</span>
+      <div class="field"><span>Mayúsculas</span>
         ${this.choice('text-transform', cs.textTransform, [['none', 'Como está'], ['uppercase', 'TODO'], ['capitalize', 'Cada Palabra']])}
       </div>`;
+  }
+
+  /** Orden entre sus hermanos: solo existe si el contenedor los coloca en fila, columna o cuadrícula. */
+  private orderSection(el: Element): string {
+    const parent = el.parentElement;
+    const sibs = parent ? orderedSiblings(parent) : [];
+    if (!parent || sibs.length < 2 || !sibs.includes(el)) return '';
+    const pcs = getComputedStyle(parent);
+    if (!isFlex(pcs.display) && !isGrid(pcs.display)) {
+      return `<div class="note">Para cambiar el orden de este elemento, pon su contenedor («↑ Padre») en fila, columna o cuadrícula.</div>`;
+    }
+    const i = sibs.indexOf(el);
+    const span = isGrid(pcs.display) ? this.spanField(el, pcs) : '';
+    const where = isGrid(pcs.display) ? 'la cuadrícula' : pcs.flexDirection.startsWith('column') ? 'su columna' : 'su fila';
+    const changed = this.store.get(this.orderKey(el), 'order');
+    const btn = (how: string, label: string, off: boolean, title: string) =>
+      `<button data-act="order" data-value="${how}" title="${title}" ${off ? 'disabled' : ''}>${label}</button>`;
+    return `
+      <div class="field"><span>Orden <span class="muted">· ${i + 1}.º de ${sibs.length} en ${where}</span></span>
+        <div class="toggle${changed ? ' changed' : ''}">
+          ${btn('first', '⇤ Primero', i === 0, 'Mover al principio')}
+          ${btn('prev', '← Antes', i === 0, 'Una posición antes')}
+          ${btn('next', 'Después →', i === sibs.length - 1, 'Una posición después')}
+          ${btn('last', 'Último ⇥', i === sibs.length - 1, 'Mover al final')}
+        </div>
+        <div class="note">Se aplica solo a este elemento, aunque arriba esté elegido «Todos».${changed ? ' <button class="link" data-act="order" data-value="reset">Orden original</button>' : ''}</div>
+      </div>${span}`;
+  }
+
+  /** En una cuadrícula: cuántas columnas ocupa el elemento. */
+  private spanField(el: Element, pcs: CSSStyleDeclaration): string {
+    const cols = trackSizes(pcs.gridTemplateColumns).length;
+    if (cols < 2) return '';
+    const m = getComputedStyle(el).gridColumnEnd.match(/span (\d+)/);
+    const current = m ? m[1] : '1';
+    const opts = Array.from({ length: Math.min(cols, 4) }, (_, k) => String(k + 1));
+    return `<div class="field"><span>Ocupa <span class="muted">columnas de la cuadrícula</span></span>
+      ${this.choice('grid-column', current === '1' ? 'auto' : `span ${current}`, opts.map((n) => [n === '1' ? 'auto' : `span ${n}`, n === '1' ? '1 columna' : `${n} columnas`]))}</div>`;
+  }
+
+  private setGridColumns(delta: number): void {
+    if (!this.selected) return;
+    const n = Math.min(12, Math.max(1, trackSizes(getComputedStyle(this.selected).gridTemplateColumns).length + delta));
+    this.commit('grid-template-columns', `repeat(${n}, 1fr)`);
+  }
+
+  /** El orden siempre va por elemento: con la misma regla para todos los hermanos no cambiaría nada. */
+  private orderKey(el: Element): string {
+    return ruleKey(selectorFor(el, 'element'), this.screen);
+  }
+
+  /** Cambia el orden con la propiedad `order`, sin tocar el HTML. */
+  private reorder(how: string): void {
+    const el = this.selected;
+    const parent = el?.parentElement;
+    if (!el || !parent) return;
+    const sibs = orderedSiblings(parent);
+    const i = sibs.indexOf(el);
+    if (i < 0) return;
+    const key = this.orderKey(el);
+    const item = (sib: Element, value: number) => {
+      const k = this.orderKey(sib);
+      return { selector: k, prop: 'order', value: String(value), original: this.store.get(k, 'order')?.original ?? getComputedStyle(sib).order };
+    };
+    if (how === 'reset') return this.store.remove(key, 'order');
+    const others = sibs.filter((s) => s !== el).map((s) => Number(getComputedStyle(s).order) || 0);
+    if (how === 'first') return this.store.setAcross([item(el, Math.min(...others) - 1)]);
+    if (how === 'last') return this.store.setAcross([item(el, Math.max(...others) + 1)]);
+    // Un paso: se intercambia con el vecino y se numeran todos los hermanos en el orden nuevo.
+    const j = how === 'prev' ? i - 1 : i + 1;
+    if (j < 0 || j >= sibs.length) return;
+    const next = sibs.slice();
+    [next[i], next[j]] = [next[j], next[i]];
+    this.store.setAcross(next.map((sib, n) => item(sib, n)).filter((it, n) => getComputedStyle(next[n]).order !== it.value || this.store.get(it.selector, 'order')));
   }
 
   private layoutSection(el: Element, _selector: string): string {
@@ -796,8 +1189,8 @@ export class Editor {
     const grid = isGrid(cs.display);
     const childCount = el.children.length;
     const children = flex ? (cs.flexDirection.startsWith('column') ? 'column' : 'row') : grid ? 'grid' : 'normal';
-    const childButtons = `<div class="toggle">${([['normal', 'Uno debajo de otro'], ['row', 'En fila'], ['column', 'En columna']] as const)
-      .map(([v, l]) => `<button data-act="children" data-value="${v}" class="${children === v ? 'on' : ''}">${l}</button>`).join('')}</div>`;
+    const childButtons = `<div class="field"><div class="toggle">${([['normal', 'Apilados'], ['row', 'En fila'], ['column', 'En columna'], ['grid', 'Cuadrícula']] as const)
+      .map(([v, l]) => `<button data-act="children" data-value="${v}" class="${children === v ? 'on' : ''}">${l}</button>`).join('')}</div></div>`;
 
     let alignment = '';
     if (flex) {
@@ -822,18 +1215,32 @@ export class Editor {
         <div class="row"><span class="muted lbl">Vertical</span>${this.choice(v, norm(v), opts(v))}</div>
         ${tight('vertical')}`;
     }
-    const gap = flex || grid
+    const cols = trackSizes(cs.gridTemplateColumns).length;
+    const gap = flex
       ? `<div class="form">${this.numberField('gap', readValue(cs, 'gap'))}</div>`
-      : '';
+      : grid
+        ? `<div class="form">
+            <span>Columnas</span>
+            <span class="row nowrap stepper${this.store.get(this.selector!, 'grid-template-columns') ? ' changed' : ''}">
+              <button data-act="grid-cols" data-value="-1" ${cols <= 1 ? 'disabled' : ''} aria-label="Una columna menos">−</button>
+              <b>${cols}</b>
+              <button data-act="grid-cols" data-value="1" ${cols >= 12 ? 'disabled' : ''} aria-label="Una columna más">+</button>
+              <span class="muted">iguales</span></span>
+            ${this.numberField('column-gap', readValue(cs, 'column-gap'))}
+            ${this.numberField('row-gap', readValue(cs, 'row-gap'))}
+          </div>
+          <div class="note">También puedes arrastrar los huecos morados entre columnas y filas.</div>`
+        : '';
+    const order = this.orderSection(el);
     if (childCount === 0) {
-      return '<div class="empty">Este elemento no contiene otros elementos. Pulsa «↑ Padre» para alinear el contenedor en el que está.</div>';
+      return `${order}<div class="empty">Este elemento no contiene otros elementos. Pulsa «↑ Padre» para alinear el contenedor en el que está.</div>`;
     }
-    return `
+    return `${order}
       <div class="row"><span class="muted">Colocar ${childCount === 1 ? 'el elemento de dentro' : `los ${childCount} elementos de dentro`}</span></div>
-      ${grid ? '<div class="muted">Este elemento usa una cuadrícula (grid). Aquí solo se ajusta la separación.</div>' : childButtons}
+      ${childButtons}
       ${alignment}
       ${gap}
-      ${!flex && !grid ? '<div class="muted">Elige «En fila» o «En columna» para poder alinear y separar los elementos de dentro.</div>' : ''}`;
+      ${!flex && !grid ? '<div class="muted">Elige «En fila», «En columna» o «Cuadrícula» para poder alinear y separar los elementos de dentro.</div>' : ''}`;
   }
 
   private syncInputs(part: HTMLElement, except: HTMLInputElement | null): void {
@@ -856,21 +1263,26 @@ export class Editor {
       ? '<div class="empty">Todavía no hay cambios.</div>'
       : `<div class="changes">${rows.map((r) => `
           <div class="change">
-            <span class="what" title="${escapeHtml(`${r.selector} { ${r.prop}: ${r.value} }`)}">
-              <code>${escapeHtml(r.selector)}</code> ${propLabel(r.prop)}: <span class="muted">${escapeHtml(r.original)} →</span> <b>${escapeHtml(r.value)}</b>
+            <span class="what" title="${escapeHtml(`${r.selector.replace('{', ' { ')} { ${r.prop}: ${r.value} }`)}">
+              ${screenTag(r.selector)}<code>${escapeHtml(parseKey(r.selector).selector)}</code> ${propLabel(r.prop)}: <span class="muted">${escapeHtml(r.original)} →</span> <b>${escapeHtml(r.value)}</b>
             </span>
             <button class="icon" data-act="remove" data-selector="${escapeHtml(r.selector)}" data-prop="${r.prop}" title="Quitar este cambio">✕</button>
           </div>`).join('')}</div>`;
+    // Pie de altura fija: la lista y el CSS se despliegan dentro del panel sin cambiar su tamaño.
+    const listScroll = part.scrollTop;
     part.innerHTML = `
-      <div class="row"><b>Cambios (${rows.length})</b><span style="flex:1"></span>
-        <button data-act="undo" ${this.store.canUndo() ? '' : 'disabled'}>Deshacer</button>
-        <button data-act="redo" ${this.store.canRedo() ? '' : 'disabled'}>Rehacer</button>
-      </div>
-      ${list}
-      ${rows.length ? `<details ${this.cssOpen ? 'open' : ''}><summary class="muted">Ver CSS</summary><textarea readonly>${escapeHtml(this.exportCss())}</textarea></details>` : ''}
-      <div class="row">
+      <div class="row nowrap"><b>Cambios (${rows.length})</b><span style="flex:1"></span>
+        <button class="icon" data-act="undo" title="Deshacer (Ctrl+Z)" aria-label="Deshacer" ${this.store.canUndo() ? '' : 'disabled'}>↶</button>
+        <button class="icon" data-act="redo" title="Rehacer (Ctrl+Shift+Z)" aria-label="Rehacer" ${this.store.canRedo() ? '' : 'disabled'}>↷</button>
+        <button data-act="compare" title="Ver la página original, sin tus cambios" ${rows.length ? '' : 'disabled'}>Antes</button>
         <button class="primary" data-act="copy" ${rows.length ? '' : 'disabled'}>Copiar CSS</button>
-        <button data-act="clear" ${rows.length ? '' : 'disabled'}>Descartar todo</button>
-      </div>`;
+      </div>
+      ${rows.length ? `<details ${this.cssOpen ? 'open' : ''}><summary class="muted">Ver cambios y CSS</summary>
+        <div class="foot-more">
+          ${list}
+          <textarea readonly wrap="off" aria-label="CSS de los cambios">${escapeHtml(this.exportCss())}</textarea>
+          <div class="row"><button data-act="clear">Descartar todo</button></div>
+        </div></details>` : ''}`;
+    part.scrollTop = listScroll;
   }
 }

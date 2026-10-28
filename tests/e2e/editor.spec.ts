@@ -424,3 +424,19 @@ test('cuadrícula: número de columnas, huecos arrastrables y columnas que ocupa
   await ui(page, 'button[data-prop="grid-column"][data-value="span 2"]').click();
   expect((await card.nth(0).boundingBox())!.width).toBeGreaterThan(w0 * 1.8);
 });
+
+test('con Alt se miden las distancias hasta otro elemento y hasta el contenedor', async ({ page }) => {
+  const cards = page.locator('.card');
+  await cards.nth(0).click({ position: { x: 6, y: 6 } });
+  const b = (await cards.nth(1).boundingBox())!;
+  await page.keyboard.down('Alt');
+  await page.mouse.move(b.x + 6, b.y + 6);
+  await expect(ui(page, '.measure-label:visible')).toHaveText(['24']);
+
+  // Sobre el contenedor (.cards), las distancias a sus bordes: 32 px de relleno a la izquierda.
+  const c = (await page.locator('.cards').boundingBox())!;
+  await page.mouse.move(c.x + 10, c.y + c.height - 10);
+  await expect(ui(page, '.measure-label:visible').first()).toHaveText('32');
+  await page.keyboard.up('Alt');
+  await expect(ui(page, '.measure-label:visible')).toHaveCount(0);
+});

@@ -36,6 +36,8 @@ export const UI_CSS = `
 .size.wh { cursor: nwse-resize; width: 12px; height: 12px; }
 
 .dims { position: fixed; background: #3b82f6; color: #fff; padding: 1px 6px; border-radius: 3px; font-size: 11px; white-space: nowrap; }
+.measure-line { position: fixed; background: #e5484d; }
+.measure-label { position: fixed; transform: translate(-50%, -50%); background: #e5484d; color: #fff; padding: 0 5px; border-radius: 3px; font-size: 11px; white-space: nowrap; }
 .tip { position: fixed; z-index: 2; background: #1d1d1f; color: #fff; padding: 4px 8px; border-radius: 4px; font-size: 12px; white-space: nowrap; }
 .tip .snap { color: #9be38a; }
 

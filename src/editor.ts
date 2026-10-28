@@ -5,6 +5,7 @@ import { selectorFor, defaultScope, classSelector, describe, type Scope } from '
 import { UI_CSS } from './styles';
 import { collectVariables, lengthVar, type CssVariable } from './variables';
 import { trackSizes, gapRects } from './grid';
+import { distances } from './distances';
 import { SCREENS, screenFor, ruleKey, parseKey, type Screen } from './screens';
 import {
   styleLabel, readValue, originalValue, collectFonts, collectFontSizes, axisProp, isFlex, isGrid,
@@ -21,7 +22,7 @@ const BLOCK_ONLY = ['width', 'height', 'margin-top', 'margin-bottom'];
 export const needsInlineBlock = (display: string, props: readonly string[]) =>
   display === 'inline' && props.some((p) => BLOCK_ONLY.includes(p));
 const STORAGE_PREFIX = 'css-workout:';
-const HELP = 'Arrastra una etiqueta subrayada para cambiar su valor\nArrastra con Alt: sin imán\nArrastra con Shift: de 8 en 8\nEsc: soltar la selección\nCtrl+Z / Ctrl+Shift+Z: deshacer y rehacer';
+const HELP = 'Arrastra una etiqueta subrayada para cambiar su valor\nAlt sobre otro elemento: medir distancias\nArrastra con Alt: sin imán\nArrastra con Shift: de 8 en 8\nEsc: soltar la selección\nCtrl+Z / Ctrl+Shift+Z: deshacer y rehacer';
 
 const SIDE_LABEL: Record<Side, string> = { top: 'superior', right: 'derecho', bottom: 'inferior', left: 'izquierdo' };
 const KIND_LABEL: Record<Kind, string> = { margin: 'Margen', padding: 'Relleno' };
@@ -212,6 +213,8 @@ export class Editor {
   private previews = new Set<HTMLStyleElement>();
   /** Editando cómo se ve al pasar el ratón: los elementos afectados se fuerzan a ese estado. */
   private hoverState = false;
+  /** Alt pulsado con algo seleccionado: se miden distancias hasta lo que hay bajo el ratón. */
+  private measuring = false;
   private forced = new Set<Element>();
   private comparePill!: HTMLButtonElement;
   /** Pestaña y selector dibujados por última vez, para conservar el desplazamiento. */
@@ -225,6 +228,7 @@ export class Editor {
     size: { w: HTMLElement; h: HTMLElement; wh: HTMLElement };
     twins: HTMLElement[];
     gaps: HTMLElement[];
+    measures: { line: HTMLElement; label: HTMLElement }[];
   };
 
   constructor(private doc: Document = document) {
@@ -257,6 +261,7 @@ export class Editor {
     });
     this.attachPage(doc);
     doc.addEventListener('keydown', this.onKeyDown, true);
+    doc.addEventListener('keyup', this.onKeyUp, true);
     doc.defaultView?.addEventListener('resize', this.onResize);
     this.collectAll();
     this.renderPanel();
@@ -268,6 +273,7 @@ export class Editor {
     this.detachPage(this.page);
     if (this.page !== this.doc) this.detachPage(this.doc);
     this.doc.removeEventListener('keydown', this.onKeyDown, true);
+    this.doc.removeEventListener('keyup', this.onKeyUp, true);
     this.doc.defaultView?.removeEventListener('resize', this.onResize);
     this.host.remove();
   }
@@ -281,7 +287,7 @@ export class Editor {
     this.updatePreviews();
     page.addEventListener('mousemove', this.onMouseMove, true);
     page.addEventListener('click', this.onClick, true);
-    if (page !== this.doc) page.addEventListener('keydown', this.onKeyDown, true);
+    if (page !== this.doc) { page.addEventListener('keydown', this.onKeyDown, true); page.addEventListener('keyup', this.onKeyUp, true); }
   }
 
   private detachPage(page: Document): void {
@@ -289,7 +295,7 @@ export class Editor {
     page.getElementById('css-workout-hover')?.remove();
     page.removeEventListener('mousemove', this.onMouseMove, true);
     page.removeEventListener('click', this.onClick, true);
-    if (page !== this.doc) page.removeEventListener('keydown', this.onKeyDown, true);
+    if (page !== this.doc) { page.removeEventListener('keydown', this.onKeyDown, true); page.removeEventListener('keyup', this.onKeyUp, true); }
     for (const st of this.previews) if (st.ownerDocument === page) { st.remove(); this.previews.delete(st); }
   }
 
@@ -436,7 +442,7 @@ export class Editor {
     this.ov = {
       hover: h('div', 'hover', L), hoverTag: h('div', 'hover-tag', L),
       sel: h('div', 'sel', L), dims: h('div', 'dims', L), tip: h('div', 'tip', this.layer),
-      areas, zones, size, twins: [], gaps: [],
+      areas, zones, size, twins: [], gaps: [], measures: [],
     };
     this.ov.tip.style.display = 'none';
   }
@@ -485,6 +491,7 @@ export class Editor {
       }
     }
     this.placeSizeHandles(sizing ? box : null);
+    this.renderMeasures(el);
     this.renderTwins(el);
     this.renderGridGaps(this.mode === 'layout' ? el : null);
   }
@@ -497,6 +504,36 @@ export class Editor {
     w.style.left = `${b.x + b.w - 5}px`; w.style.top = `${b.y + b.h / 2 - 11}px`;
     hh.style.left = `${b.x + b.w / 2 - 11}px`; hh.style.top = `${b.y + b.h - 5}px`;
     wh.style.left = `${b.x + b.w - 6}px`; wh.style.top = `${b.y + b.h - 6}px`;
+  }
+
+  /**
+   * Con Alt: cotas entre la selección y el elemento bajo el ratón (su contenedor incluido),
+   * o hasta los bordes de la ventana si no hay ninguno.
+   */
+  private renderMeasures(el: Element | null): void {
+    let lines: ReturnType<typeof distances> = [];
+    if (el && this.measuring && !this.drag) {
+      const a = el.getBoundingClientRect();
+      const other = this.hovered && this.hovered !== el && this.hovered !== this.page.body ? this.hovered.getBoundingClientRect() : null;
+      const view = this.page.documentElement;
+      const b = other ?? new DOMRect(0, 0, view.clientWidth, view.clientHeight);
+      lines = distances({ x: a.left, y: a.top, w: a.width, h: a.height }, { x: b.left, y: b.top, w: b.width, h: b.height });
+    }
+    while (this.ov.measures.length < lines.length) {
+      this.ov.measures.push({ line: h('div', 'measure-line', this.ovRoot), label: h('div', 'measure-label', this.ovRoot) });
+    }
+    this.ov.measures.forEach(({ line, label }, i) => {
+      const m = lines[i];
+      if (!m) { place(line, null); label.style.display = 'none'; return; }
+      const horizontal = m.y1 === m.y2;
+      place(line, horizontal
+        ? { x: Math.min(m.x1, m.x2), y: m.y1, w: Math.abs(m.x2 - m.x1), h: 1 }
+        : { x: m.x1, y: Math.min(m.y1, m.y2), w: 1, h: Math.abs(m.y2 - m.y1) });
+      label.style.display = '';
+      label.textContent = `${m.value}`;
+      label.style.left = `${(m.x1 + m.x2) / 2}px`;
+      label.style.top = `${(m.y1 + m.y2) / 2}px`;
+    });
   }
 
   /** En una cuadrícula, los huecos entre columnas y filas se ven y se arrastran para cambiar la separación. */
@@ -554,6 +591,7 @@ export class Editor {
       for (const side of SIDES) { place(ov.areas[kind][side], null); place(ov.zones[kind][side], null); }
     }
     this.placeSizeHandles(null);
+    this.renderMeasures(null);
     for (const t of this.ov.twins) place(t, null);
     this.renderGridGaps(null);
   }
@@ -669,6 +707,7 @@ export class Editor {
   };
 
   private onMouseMove = (e: MouseEvent) => {
+    this.measuring = e.altKey;
     if (!this.active || this.drag || this.comparing) return;
     const t = e.target as Element | null;
     this.hovered = !t || this.isOwn(t) || t === this.page.documentElement ? null : t;
@@ -687,6 +726,7 @@ export class Editor {
   private onKeyDown = (e: KeyboardEvent) => {
     const inField = this.isOwn(e.target) && this.root.activeElement instanceof HTMLInputElement;
     if (inField) return;
+    if (e.key === 'Alt' && this.selected) { this.measuring = true; e.preventDefault(); }
     const mod = e.ctrlKey || e.metaKey;
     if (this.comparing) {
       if (e.key === 'Escape') { this.setComparing(false); e.preventDefault(); }
@@ -701,6 +741,10 @@ export class Editor {
       e.preventDefault();
       this.store.redo();
     }
+  };
+
+  private onKeyUp = (e: KeyboardEvent) => {
+    if (e.key === 'Alt') this.measuring = false;
   };
 
   private isTyping(target: EventTarget | null): boolean {

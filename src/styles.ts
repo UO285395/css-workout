@@ -122,7 +122,9 @@ select { width: 100%; font: inherit; padding: 2px 4px; border: 1px solid #d2d2d7
 select.changed { border-color: #3b82f6; background: #eff6ff; }
 input[type=color] { width: 32px; height: 22px; padding: 0; border: 1px solid #d2d2d7; border-radius: 4px; background: none; cursor: pointer; }
 input[type=color].changed { border-color: #3b82f6; }
-.swatches { display: flex; gap: 3px; flex-wrap: nowrap; }
+.color-row { display: flex; gap: 6px; align-items: flex-start; }
+.swatches { display: flex; gap: 3px; flex-wrap: wrap; }
+.swatch.var { border-radius: 50%; }
 .swatch { width: 18px; height: 18px; padding: 0; border: 1px solid rgba(0,0,0,.18); border-radius: 4px; }
 .swatch.on { outline: 2px solid #3b82f6; outline-offset: 1px; }
 .corners { display: grid; grid-template-columns: 16px 1fr 16px 1fr; gap: 6px 8px; align-items: center; margin-bottom: 10px; }

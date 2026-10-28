@@ -797,7 +797,12 @@ export class Editor {
       case 'children': this.setChildren(btn.dataset.value!); break;
       case 'order': this.reorder(btn.dataset.value!); break;
       case 'grid-cols': this.setGridColumns(Number(btn.dataset.value)); break;
-      case 'hover': this.hoverState = !this.hoverState; this.tabView = ''; break;
+      case 'hover':
+        this.hoverState = !this.hoverState;
+        this.tabView = '';
+        // En el acto, sin esperar al siguiente frame: quien mire el elemento justo después ya lo ve en su estado.
+        this.syncForcedHover();
+        break;
       case 'scope-class': this.scope = 'class'; break;
       case 'scope-element': this.scope = 'element'; break;
       case 'undo': this.store.undo(); break;

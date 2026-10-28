@@ -267,3 +267,28 @@ test('alinear el texto de una tarjeta no la mueve: su título deja hueco', async
   expect(await style(card, 'text-align')).toBe('center');
   expect(await card.boundingBox()).toEqual(before);
 });
+
+test('«Antes» muestra la página original sin perder los cambios', async ({ page }) => {
+  const h1 = page.locator('.hero h1');
+  await h1.click();
+  await ui(page, 'button[data-act="mode-text"]').click();
+  await ui(page, 'button[data-prop="font-style"][data-value="italic"]').click();
+  expect(await style(h1, 'font-style')).toBe('italic');
+
+  await ui(page, 'button[data-act="compare"]').click();
+  expect(await style(h1, 'font-style')).toBe('normal');
+  await expect(ui(page, '.panel')).toBeHidden();
+  await expect(ui(page, '.sel')).toBeHidden();
+  // Mientras se compara, un clic en la página no selecciona nada.
+  await page.locator('.card').first().click({ position: { x: 6, y: 6 } });
+
+  await ui(page, '.compare-pill').click();
+  expect(await style(h1, 'font-style')).toBe('italic');
+  await expect(ui(page, '.panel')).toBeVisible();
+  await expect(ui(page, '.panel')).toContainText('h1');
+
+  await ui(page, 'button[data-act="compare"]').click();
+  await page.keyboard.press('Escape');
+  expect(await style(h1, 'font-style')).toBe('italic');
+  await expect(ui(page, '.compare-pill')).toBeHidden();
+});

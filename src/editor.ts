@@ -143,6 +143,9 @@ export class Editor {
   private drag: Drag | null = null;
   private frame = 0;
   private cssOpen = false;
+  /** Mostrando la página original: los cambios siguen guardados, solo se apaga la vista previa. */
+  private comparing = false;
+  private comparePill!: HTMLButtonElement;
   /** Pestaña y selector dibujados por última vez, para conservar el desplazamiento. */
   private tabView = '';
   private storageKey: string;
@@ -166,6 +169,10 @@ export class Editor {
     this.buildOverlay();
     this.panel = h('div', 'panel', this.layer);
     this.buildPanel();
+    this.comparePill = h('button', 'compare-pill', this.layer);
+    this.comparePill.innerHTML = '<span class="muted">Viendo el original</span> <b>Volver a mis cambios</b>';
+    this.comparePill.title = 'Volver a mostrar tus cambios (Esc)';
+    this.comparePill.addEventListener('click', () => this.setComparing(false));
     doc.documentElement.appendChild(this.host);
 
     this.previewStyle = doc.createElement('style');
@@ -174,6 +181,7 @@ export class Editor {
 
     this.restore();
     this.store.onChange(() => {
+      if (this.store.size === 0 && this.comparing) this.setComparing(false);
       this.previewStyle.textContent = this.store.toCss({ important: true });
       this.persist();
       this.renderPanel();
@@ -419,14 +427,23 @@ export class Editor {
     return target === this.host;
   }
 
+  /** Antes y después: apaga la vista previa y oculta toda la interfaz salvo el botón para volver. */
+  private setComparing(on: boolean): void {
+    if (on && this.store.size === 0) return;
+    this.comparing = on;
+    this.previewStyle.media = on ? 'not all' : '';
+    this.layer.classList.toggle('comparing', on);
+    if (on) this.hovered = null;
+  }
+
   private onMouseMove = (e: MouseEvent) => {
-    if (!this.active || this.drag) return;
+    if (!this.active || this.drag || this.comparing) return;
     const t = e.target as Element | null;
     this.hovered = !t || this.isOwn(t) || t === this.doc.documentElement ? null : t;
   };
 
   private onClick = (e: MouseEvent) => {
-    if (!this.active || this.isOwn(e.target)) return;
+    if (!this.active || this.comparing || this.isOwn(e.target)) return;
     const t = e.target as Element;
     if (t === this.doc.documentElement) return;
     // Mientras se edita, un clic selecciona en vez de seguir enlaces o pulsar botones del prototipo.
@@ -439,6 +456,10 @@ export class Editor {
     const inField = this.isOwn(e.target) && this.root.activeElement instanceof HTMLInputElement;
     if (inField) return;
     const mod = e.ctrlKey || e.metaKey;
+    if (this.comparing) {
+      if (e.key === 'Escape') { this.setComparing(false); e.preventDefault(); }
+      return;
+    }
     if (e.key === 'Escape' && this.selected) { this.select(null); e.preventDefault(); return; }
     if (!this.active || this.isTyping(e.target)) return;
     if (mod && e.key.toLowerCase() === 'z') {
@@ -540,6 +561,7 @@ export class Editor {
         if (confirm('¿Descartar todos los cambios?')) this.store.clear();
         break;
       case 'copy': void this.copy(btn); return;
+      case 'compare': this.setComparing(true); return;
     }
     this.renderPanel();
   }
@@ -888,6 +910,7 @@ export class Editor {
       <div class="row nowrap"><b>Cambios (${rows.length})</b><span style="flex:1"></span>
         <button class="icon" data-act="undo" title="Deshacer (Ctrl+Z)" aria-label="Deshacer" ${this.store.canUndo() ? '' : 'disabled'}>↶</button>
         <button class="icon" data-act="redo" title="Rehacer (Ctrl+Shift+Z)" aria-label="Rehacer" ${this.store.canRedo() ? '' : 'disabled'}>↷</button>
+        <button data-act="compare" title="Ver la página original, sin tus cambios" ${rows.length ? '' : 'disabled'}>Antes</button>
         <button class="primary" data-act="copy" ${rows.length ? '' : 'disabled'}>Copiar CSS</button>
       </div>
       ${rows.length ? `<details ${this.cssOpen ? 'open' : ''}><summary class="muted">Ver cambios y CSS</summary>

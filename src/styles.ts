@@ -39,6 +39,12 @@ export const UI_CSS = `
   pointer-events: auto; background: #fff; border: 1px solid #d2d2d7; border-radius: 10px;
   box-shadow: 0 8px 28px rgba(0,0,0,.18); }
 .panel.left { right: auto; left: 16px; }
+/* Antes y después: solo queda a la vista el botón para volver. */
+.layer.comparing > :not(.compare-pill) { display: none !important; }
+.compare-pill { display: none; position: fixed; right: 16px; bottom: 16px; z-index: 1; pointer-events: auto; padding: 8px 14px;
+  border-radius: 999px; background: #fff; border: 1px solid #d2d2d7; box-shadow: 0 6px 20px rgba(0,0,0,.18); }
+.compare-pill b { color: #3b82f6; }
+.layer.comparing > .compare-pill { display: block; }
 .panel.min { height: auto; }
 .panel.min .body { display: none; }
 .head { flex: none; display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-bottom: 1px solid #ececf0; }

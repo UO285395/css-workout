@@ -22,6 +22,8 @@ Atajos: `Alt` arrastra sin imán · `Shift` va de 8 en 8 px · `Esc` suelta la s
 
 «Usar página» desactiva la selección para poder navegar el prototipo con normalidad.
 
+«Antes», junto a Copiar CSS, muestra la página original sin tus cambios y oculta el panel, para enseñar la diferencia. «Volver a mis cambios» o `Esc` los vuelve a mostrar; no se pierde nada.
+
 ### El imán
 
 Como los prototipos no siempre tienen una escala de espaciado fija, al arrastrar el valor se «pega» a los espaciados que ya usa la página (márgenes, rellenos y gaps de todos sus elementos) cuando pasa a menos de 3 px. Así no aparecen valores sueltos como 17 px. El aviso «ya usado en la página» indica cuándo ha ocurrido.

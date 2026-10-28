@@ -9,7 +9,7 @@ import { distances } from './distances';
 import { collectBorderValues, parseShadow, formatShadow, withPart, shadowPart, DEFAULT_SHADOW, type BorderValues, type ShadowPart } from './borders';
 import { SCREENS, screenFor, ruleKey, parseKey, type Screen } from './screens';
 import {
-  styleLabel, readValue, originalValue, collectFonts, collectFontSizes, axisProp, isFlex, isGrid,
+  styleLabel, readValue, originalValue, collectFonts, collectFontSizes, collectColors, rgbToHex, axisProp, isFlex, isGrid,
   isTransparent, NUMERIC, WEIGHTS,
 } from './styleprops';
 
@@ -103,6 +103,8 @@ function hoverRulesCopy(doc: Document): string {
   }
   return out.join('\n');
 }
+/** Color de una variable en hexadecimal de 6 cifras, para compararlo con los de la página. */
+const toHex = (v: string) => (/^#[0-9a-f]{3}$/i.test(v) ? '#' + v.slice(1).split('').map((c) => c + c).join('') : rgbToHex(v)).toLowerCase();
 const escapeHtml = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
 
 type Item = { prop: string; value: string; original: string };
@@ -198,6 +200,7 @@ export class Editor {
   private selected: Element | null = null;
   private candidates: number[] = [];
   private fontSizes: number[] = [];
+  private colors: string[] = [];
   private borderValues: BorderValues = { widths: [], radii: [], shadows: [] };
   private fonts: string[] = [];
   private vars: CssVariable[] = [];
@@ -765,6 +768,7 @@ export class Editor {
     const ignore = (el: Element) => el === this.host;
     this.candidates = collectSpacingValues(root, ignore);
     this.fontSizes = collectFontSizes(root, ignore);
+    this.colors = collectColors(root, ignore);
     this.borderValues = collectBorderValues(root, ignore);
     this.fonts = collectFonts(root, ignore);
     this.vars = collectVariables(this.page);
@@ -1170,14 +1174,19 @@ export class Editor {
   private colorField(prop: string, cs: CSSStyleDeclaration): string {
     const changed = this.store.get(this.selector!, prop) ? 'changed' : '';
     const none = !this.store.get(this.selector!, prop) && isTransparent(cs.getPropertyValue(prop));
-    // Con variables de color en la página, se ofrecen como muestras en lugar del código del color.
-    const colors = this.vars.filter((v) => v.kind === 'color').slice(0, 7);
+    // Muestras: primero las variables de color del prototipo y después los colores que ya usa la página.
+    const vars = this.vars.filter((v) => v.kind === 'color').slice(0, 7);
+    const named = new Set(vars.map((v) => toHex(v.value)));
+    const used = this.colors.filter((c) => !named.has(c));
     const current = this.store.get(this.selector!, prop)?.value;
     const hex = none ? 'sin color' : readValue(cs, prop);
-    const swatches = colors.map((v) => `<button class="swatch${current === `var(${v.name})` ? ' on' : ''}" data-act="set" data-prop="${prop}" data-value="var(${escapeHtml(v.name)})" title="${escapeHtml(v.name)}: ${escapeHtml(v.value)}" aria-label="${escapeHtml(v.name)}" style="background:${escapeHtml(v.value)}"></button>`).join('');
+    const swatch = (value: string, color: string, title: string, cls = '') =>
+      `<button class="swatch${cls}${current === value ? ' on' : ''}" data-act="set" data-prop="${prop}" data-value="${escapeHtml(value)}" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}" style="background:${escapeHtml(color)}"></button>`;
+    const swatches = vars.map((v) => swatch(`var(${v.name})`, v.value, `${v.name}: ${v.value}`, ' var')).join('') +
+      used.map((c) => swatch(c, c, `Usado en la página: ${c}`)).join('');
     return `<span>${styleLabel(prop)}</span>
-      <span class="row nowrap"><input type="color" data-prop="${prop}" value="${none ? '#ffffff' : readValue(cs, prop)}" class="${changed}" aria-label="${styleLabel(prop)}" title="${hex}">
-      ${colors.length ? `<span class="swatches">${swatches}</span>` : none ? '<span class="muted">sin color</span>' : `<code>${hex}</code>`}</span>`;
+      <span class="color-row"><input type="color" data-prop="${prop}" value="${none ? '#ffffff' : readValue(cs, prop)}" class="${changed}" aria-label="${styleLabel(prop)}" title="${hex}">
+      ${swatches ? `<span class="swatches">${swatches}</span>` : none ? '<span class="muted">sin color</span>' : `<code>${hex}</code>`}</span>`;
   }
 
   private textSection(el: Element, _selector: string): string {

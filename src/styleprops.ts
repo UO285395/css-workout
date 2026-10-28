@@ -132,6 +132,29 @@ export function collectFonts(root: ParentNode, ignore?: (el: Element) => boolean
   return Array.from(fonts).filter(Boolean);
 }
 
+/**
+ * Colores que ya usa la página (texto, fondo y bordes), de más a menos usado.
+ * Sirven de paleta aunque el prototipo no defina variables de color.
+ */
+export function collectColors(root: ParentNode, ignore?: (el: Element) => boolean, limit = 8): string[] {
+  const counts = new Map<string, number>();
+  const add = (v: string) => {
+    if (!v || isTransparent(v)) return;
+    const hex = rgbToHex(v);
+    if (/^#[0-9a-f]{6}$/.test(hex)) counts.set(hex, (counts.get(hex) ?? 0) + 1);
+  };
+  for (const el of Array.from(root.querySelectorAll('*'))) {
+    if (ignore?.(el)) continue;
+    const cs = getComputedStyle(el);
+    if (cs.display === 'none') continue;
+    add(cs.color);
+    add(cs.backgroundColor);
+    if (cs.borderTopStyle !== 'none' && parseFloat(cs.borderTopWidth) > 0) add(cs.borderTopColor);
+    if (cs.borderBottomStyle !== 'none' && parseFloat(cs.borderBottomWidth) > 0) add(cs.borderBottomColor);
+  }
+  return Array.from(counts).sort((a, b) => b[1] - a[1]).slice(0, limit).map(([hex]) => hex);
+}
+
 /** Tamaños de letra que ya usa la página: hacen de imán al ajustar el tamaño. */
 export function collectFontSizes(root: ParentNode, ignore?: (el: Element) => boolean): number[] {
   const sizes = new Set<number>();

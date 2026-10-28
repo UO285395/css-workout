@@ -47,6 +47,10 @@ Si el prototipo define variables (`--espacio-m: 16px`, `--azul: #2563eb`), el ed
 - Sus longitudes también hacen de imán. Si el arrastre cae justo en el valor de una variable, el CSS usa `var(--espacio-m)` en lugar de los píxeles, y la etiqueta lo indica.
 - Junto a los colores de la pestaña Texto aparecen muestras con las variables de color. Pulsar una aplica `var(--azul)`.
 
+### Colores de la página
+
+Junto a cada color (texto, fondo, borde) aparecen como muestras los colores que ya usa la página, de más a menos usado. Las muestras redondas son variables de color y las cuadradas, colores sueltos; si un color ya tiene variable, solo aparece la variable.
+
 Solo se leen las hojas de estilo del mismo dominio; las de otro dominio no se pueden leer desde la página.
 
 ### Qué CSS se genera

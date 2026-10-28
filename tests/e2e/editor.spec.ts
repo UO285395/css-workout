@@ -480,3 +480,21 @@ test('bordes, esquinas y sombra: grosor, radio con imán y sombra ajustable', as
   await expect(ui(page, 'button.shadow-swatch.on')).toHaveCount(1);
   expect(await page.evaluate(() => window.cssWorkout!.exportCss())).toContain('box-shadow: 0px 8px 24px 0px rgba(37, 99, 235, 0.15);');
 });
+
+test('los colores que ya usa la página aparecen como muestras', async ({ page }) => {
+  const title = page.locator('h1');
+  await title.click();
+  await ui(page, 'button[data-act="mode-text"]').click();
+  // #2563eb ya está como variable (--azul): no se repite como color suelto.
+  await expect(ui(page, 'button.swatch.var[data-prop="color"][data-value="var(--azul)"]')).toHaveCount(1);
+  await expect(ui(page, 'button.swatch[data-prop="color"][data-value="#2563eb"]')).toHaveCount(0);
+  const used = ui(page, 'button.swatch:not(.var)[data-prop="color"]');
+  expect(await used.count()).toBeGreaterThan(1);
+
+  // El primero es el color actual del título (#222222): se elige otro.
+  const other = ui(page, 'button.swatch:not(.var)[data-prop="color"]:not([data-value="#222222"])').first();
+  const value = (await other.getAttribute('data-value'))!;
+  await other.click();
+  expect(await page.evaluate(() => window.cssWorkout!.exportCss())).toContain(`color: ${value};`);
+  await expect(ui(page, `button.swatch.on[data-prop="color"]`)).toHaveAttribute('data-value', value);
+});

@@ -6,13 +6,14 @@ import { UI_CSS } from './styles';
 import { collectVariables, lengthVar, type CssVariable } from './variables';
 import { trackSizes, gapRects } from './grid';
 import { distances } from './distances';
+import { collectBorderValues, parseShadow, formatShadow, withPart, shadowPart, DEFAULT_SHADOW, type BorderValues, type ShadowPart } from './borders';
 import { SCREENS, screenFor, ruleKey, parseKey, type Screen } from './screens';
 import {
   styleLabel, readValue, originalValue, collectFonts, collectFontSizes, axisProp, isFlex, isGrid,
   isTransparent, NUMERIC, WEIGHTS,
 } from './styleprops';
 
-type Mode = 'spacing' | 'size' | 'text' | 'layout';
+type Mode = 'spacing' | 'size' | 'text' | 'layout' | 'border';
 type Kind = 'margin' | 'padding';
 
 const HIT_MIN = 8;
@@ -104,17 +105,24 @@ function hoverRulesCopy(doc: Document): string {
 }
 const escapeHtml = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
 
+type Item = { prop: string; value: string; original: string };
+/** Cambio añadido para que otro se vea, con lo que había antes para deshacerlo junto. */
+type Implied = Item & { before: Entry | null };
+
 interface Drag {
   props: string[];
   selector: string;
   before: (Entry | null)[];
   originals: string[];
-  /** `display: inline-block` que se añade al arrastrar ancho, alto o márgenes verticales de un elemento en línea. */
-  display: { before: Entry | null } | null;
+  /** Cambios que hacen falta para que el arrastre se vea (ver `impliedItems`). */
+  extra: Implied[];
   start: number[];
   pointer: { x: number; y: number };
-  /** `vars`: la variable CSS que vale lo mismo que cada valor, si el imán ha caído en una. */
-  compute: (dx: number, dy: number, e: PointerEvent) => { values: number[]; snapped: boolean; vars?: (string | undefined)[] };
+  /**
+   * `vars`: la variable CSS que vale lo mismo que cada valor, si el imán ha caído en una.
+   * `css` y `tip`: valor y aviso ya compuestos, para propiedades que no son un número en px (la sombra).
+   */
+  compute: (dx: number, dy: number, e: PointerEvent) => { values: number[]; snapped: boolean; vars?: (string | undefined)[]; css?: string[]; tip?: string };
 }
 
 /**
@@ -190,10 +198,11 @@ export class Editor {
   private selected: Element | null = null;
   private candidates: number[] = [];
   private fontSizes: number[] = [];
+  private borderValues: BorderValues = { widths: [], radii: [], shadows: [] };
   private fonts: string[] = [];
   private vars: CssVariable[] = [];
   /** Valor previo de un color mientras se elige en el selector, para apuntarlo como un solo paso. */
-  private colorBefore = new Map<string, Entry | null>();
+  private colorBefore = new Map<string, { before: Entry | null; extra: Implied[] }>();
   private drag: Drag | null = null;
   private frame = 0;
   private cssOpen = false;
@@ -640,7 +649,7 @@ export class Editor {
       props, selector, start, compute,
       before: props.map((p) => this.store.get(selector, p)),
       originals: props.map((p) => this.store.get(selector, p)?.original ?? cs.getPropertyValue(p)),
-      display: needsInlineBlock(cs.display, props) ? { before: this.store.get(selector, 'display') } : null,
+      extra: this.impliedItems(cs, props).map((it) => ({ ...it, before: this.store.get(selector, it.prop) })),
       pointer: { x: e.clientX, y: e.clientY },
     };
     const move = (ev: PointerEvent) => this.onDragMove(ev);
@@ -658,13 +667,13 @@ export class Editor {
   private onDragMove(e: PointerEvent): void {
     const d = this.drag;
     if (!d) return;
-    const { values, snapped, vars } = d.compute(e.clientX - d.pointer.x, e.clientY - d.pointer.y, e);
-    if (d.display) this.store.preview(d.selector, 'display', 'inline-block', 'inline');
-    d.props.forEach((p, i) => this.store.preview(d.selector, p, vars?.[i] ? `var(${vars[i]})` : `${values[i]}px`, d.originals[i]));
+    const { values, snapped, vars, css, tip: text } = d.compute(e.clientX - d.pointer.x, e.clientY - d.pointer.y, e);
+    for (const x of d.extra) this.store.preview(d.selector, x.prop, x.value, x.original);
+    d.props.forEach((p, i) => this.store.preview(d.selector, p, css?.[i] ?? (vars?.[i] ? `var(${vars[i]})` : `${values[i]}px`), d.originals[i]));
     const tip = this.ov.tip;
     tip.style.display = '';
     const named = vars?.find(Boolean);
-    tip.innerHTML = d.props.map((p, i) => `${propLabel(p)}: <b>${values[i]}px</b>`).join(' · ') +
+    tip.innerHTML = (text ?? d.props.map((p, i) => `${propLabel(p)}: <b>${values[i]}px</b>`).join(' · ')) +
       (named ? ` <span class="snap">· ${escapeHtml(named)}</span>` : snapped ? ' <span class="snap">· ya usado en la página</span>' : '');
     tip.style.left = `${e.clientX + 14}px`;
     tip.style.top = `${e.clientY + 14}px`;
@@ -676,8 +685,7 @@ export class Editor {
     this.ov.tip.style.display = 'none';
     if (!d) return;
     const steps = d.props.map((prop, i) => ({ prop, before: d.before[i] }));
-    if (d.display) steps.unshift({ prop: 'display', before: d.display.before });
-    this.store.recordMany(d.selector, steps);
+    this.store.recordMany(d.selector, [...d.extra.map((x) => ({ prop: x.prop, before: x.before })), ...steps]);
   }
 
   // ---------- Eventos de la página ----------
@@ -757,6 +765,7 @@ export class Editor {
     const ignore = (el: Element) => el === this.host;
     this.candidates = collectSpacingValues(root, ignore);
     this.fontSizes = collectFontSizes(root, ignore);
+    this.borderValues = collectBorderValues(root, ignore);
     this.fonts = collectFonts(root, ignore);
     this.vars = collectVariables(this.page);
     // Los valores de las variables de longitud también hacen de imán.
@@ -799,7 +808,9 @@ export class Editor {
     this.panel.addEventListener('change', (e) => this.onPanelChange(e));
     this.panel.addEventListener('input', (e) => {
       const t = e.target as HTMLInputElement;
-      if (t.type === 'color' && t.dataset.prop) this.previewColor(t.dataset.prop, t.value);
+      if (t.type !== 'color' || !t.dataset.prop) return;
+      if (t.dataset.prop === 'shadow-color') this.previewColor('box-shadow', this.shadowWith('shadow-color', t.value));
+      else this.previewColor(t.dataset.prop, t.value);
     });
     this.panel.addEventListener('pointerdown', (e) => {
       const label = (e.target as Element).closest('[data-scrub]') as HTMLElement | null;
@@ -834,8 +845,11 @@ export class Editor {
       case 'mode-size': this.mode = 'size'; break;
       case 'mode-text': this.mode = 'text'; break;
       case 'mode-layout': this.mode = 'layout'; break;
+      case 'mode-border': this.mode = 'border'; break;
+      case 'shadow-add': this.commit('box-shadow', formatShadow(DEFAULT_SHADOW)); break;
       case 'set':
         if (btn.dataset.prop === 'text-align') this.alignText(btn.dataset.value!);
+        else if (btn.dataset.prop!.startsWith('shadow-')) this.commit('box-shadow', this.shadowWith(btn.dataset.prop as ShadowPart, btn.dataset.value!));
         else this.commit(btn.dataset.prop!, btn.dataset.value!);
         break;
       case 'children': this.setChildren(btn.dataset.value!); break;
@@ -866,12 +880,13 @@ export class Editor {
     const prop = input.dataset.prop;
     if (!prop || !this.selected) return;
     if (input instanceof HTMLSelectElement) return this.commit(prop, input.value);
-    if (input.type === 'color') return this.finishColor(prop);
+    if (input.type === 'color') return this.finishColor(prop === 'shadow-color' ? 'box-shadow' : prop);
     if (input.value.trim() === '') return;
-    const min = NUMERIC[prop]?.min ?? 0;
+    const { min, max = Infinity } = NUMERIC[prop] ?? { min: 0 };
     const step = prop === 'letter-spacing' ? 10 : 1;
-    const v = Math.max(min, Math.round(Number(input.value) * step) / step);
+    const v = Math.min(max, Math.max(min, Math.round(Number(input.value) * step) / step));
     if (!Number.isFinite(v)) return;
+    if (prop.startsWith('shadow-')) return this.commit('box-shadow', this.shadowWith(prop as ShadowPart, String(v)));
     this.commit(prop, `${v}px`);
   }
 
@@ -881,9 +896,33 @@ export class Editor {
     const selector = this.selector!;
     const cs = getComputedStyle(this.selected);
     const original = this.store.get(selector, prop)?.original ?? originalValue(cs, prop);
-    const items = [{ prop, value, original }];
-    if (needsInlineBlock(cs.display, [prop])) items.unshift({ prop: 'display', value: 'inline-block', original: 'inline' });
-    this.store.setMany(selector, items);
+    // Quitar el borde (sin línea o grosor 0) no necesita nada más.
+    const removing = (prop === 'border-style' && value === 'none') || (prop === 'border-width' && parseFloat(value) === 0);
+    this.store.setMany(selector, [...this.impliedItems(cs, removing ? [] : [prop]), { prop, value, original }]);
+  }
+
+  /**
+   * Cambios que hacen falta para que otro se vea: `inline-block` al dar ancho, alto o márgenes verticales
+   * a un elemento en línea, y una línea continua de 1 px al tocar un borde que no se ve.
+   */
+  private impliedItems(cs: CSSStyleDeclaration, props: readonly string[]): Item[] {
+    const items: Item[] = [];
+    if (needsInlineBlock(cs.display, props)) items.push({ prop: 'display', value: 'inline-block', original: 'inline' });
+    const border = props.filter((p) => p === 'border-width' || p === 'border-style' || p === 'border-color');
+    if (border.length && readValue(cs, 'border-width') === '0') {
+      const orig = (p: string) => this.store.get(this.selector!, p)?.original ?? originalValue(cs, p);
+      if (!border.includes('border-style') && SIDES.every((s) => cs.getPropertyValue(`border-${s}-style`) === 'none')) {
+        items.push({ prop: 'border-style', value: 'solid', original: orig('border-style') });
+      }
+      if (!border.includes('border-width')) items.push({ prop: 'border-width', value: '1px', original: orig('border-width') });
+    }
+    return items;
+  }
+
+  /** `box-shadow` completo con una de sus partes cambiada; sin sombra, se parte de la sombra por defecto. */
+  private shadowWith(part: ShadowPart, value: string): string {
+    const current = this.selected ? parseShadow(getComputedStyle(this.selected).boxShadow) : null;
+    return withPart(current ?? DEFAULT_SHADOW, part, value);
   }
 
   /**
@@ -957,14 +996,20 @@ export class Editor {
   private previewColor(prop: string, value: string): void {
     if (!this.selected) return;
     const selector = this.selector!;
-    if (!this.colorBefore.has(prop)) this.colorBefore.set(prop, this.store.get(selector, prop));
-    const original = this.store.get(selector, prop)?.original ?? originalValue(getComputedStyle(this.selected), prop);
+    const cs = getComputedStyle(this.selected);
+    if (!this.colorBefore.has(prop)) {
+      const extra = this.impliedItems(cs, [prop]).map((it) => ({ ...it, before: this.store.get(selector, it.prop) }));
+      this.colorBefore.set(prop, { before: this.store.get(selector, prop), extra });
+    }
+    const original = this.store.get(selector, prop)?.original ?? originalValue(cs, prop);
+    for (const x of this.colorBefore.get(prop)!.extra) this.store.preview(selector, x.prop, x.value, x.original);
     this.store.preview(selector, prop, value, original);
   }
 
   private finishColor(prop: string): void {
-    if (!this.selected || !this.colorBefore.has(prop)) return;
-    this.store.record(this.selector!, prop, this.colorBefore.get(prop) ?? null);
+    const c = this.colorBefore.get(prop);
+    if (!this.selected || !c) return;
+    this.store.recordMany(this.selector!, [...c.extra.map((x) => ({ prop: x.prop, before: x.before })), { prop, before: c.before }]);
     this.colorBefore.delete(prop);
   }
 
@@ -972,14 +1017,31 @@ export class Editor {
   private startScrub(e: PointerEvent, prop: string): void {
     if (!this.selected) return;
     const cs = getComputedStyle(this.selected);
+    if (prop.startsWith('shadow-')) return this.startShadowScrub(e, prop as ShadowPart, cs);
     const raw = readValue(cs, prop);
-    const start = raw === '' ? Math.round(parseFloat(cs.fontSize) * 1.2) : Number(raw);
+    const start = raw === '' ? (prop === 'line-height' ? Math.round(parseFloat(cs.fontSize) * 1.2) : 0) : Number(raw);
     const min = NUMERIC[prop]?.min ?? 0;
-    const candidates = prop === 'font-size' ? this.fontSizes : prop.endsWith('gap') ? this.candidates : [];
+    const border = prop.startsWith('border-');
+    const candidates = prop === 'font-size' ? this.fontSizes : prop.endsWith('gap') ? this.candidates
+      : prop === 'border-width' ? this.borderValues.widths : prop.endsWith('radius') ? this.borderValues.radii : [];
     // Cada 2 px de ratón cambian 1 px de valor: más preciso que 1:1 en valores pequeños.
     this.beginDrag(e, [prop], [start], (dx, _dy, ev) => {
       const r = snap(start + dx / 2, candidates, { free: ev.altKey, coarse: ev.shiftKey, min });
-      return { values: [r.value], snapped: r.snapped, vars: [this.varFor(r.value, r.snapped && !ev.altKey && prop !== 'line-height')] };
+      // Las variables de la página son de espaciado: no se usan para bordes ni esquinas.
+      return { values: [r.value], snapped: r.snapped, vars: [this.varFor(r.value, r.snapped && !ev.altKey && prop !== 'line-height' && !border)] };
+    });
+  }
+
+  /** Arrastrar una parte de la sombra: cambia solo esa parte del `box-shadow`. */
+  private startShadowScrub(e: PointerEvent, part: ShadowPart, cs: CSSStyleDeclaration): void {
+    const base = parseShadow(cs.boxShadow) ?? DEFAULT_SHADOW;
+    const key = part.slice(7) as 'x' | 'y' | 'blur' | 'spread' | 'alpha';
+    const start = base[key];
+    const { min, max = Infinity } = NUMERIC[part];
+    const unit = part === 'shadow-alpha' ? '%' : 'px';
+    this.beginDrag(e, ['box-shadow'], [start], (dx, _dy, ev) => {
+      const v = Math.min(max, snap(start + dx / 2, [], { free: true, coarse: ev.shiftKey, min }).value);
+      return { values: [v], snapped: false, css: [withPart(base, part, String(v))], tip: `${styleLabel(part)} de la sombra: <b>${v}${unit}</b>` };
     });
   }
 
@@ -1062,10 +1124,12 @@ export class Editor {
         <button data-act="mode-size" class="${this.mode === 'size' ? 'on' : ''}">Tamaño</button>
         <button data-act="mode-text" class="${this.mode === 'text' ? 'on' : ''}">Texto</button>
         <button data-act="mode-layout" class="${this.mode === 'layout' ? 'on' : ''}">Alineación</button>
+        <button data-act="mode-border" class="${this.mode === 'border' ? 'on' : ''}">Bordes</button>
       </div>
       </div>
       <div class="tab">
-      ${this.mode === 'text' ? this.textSection(el, selector) : this.mode === 'layout' ? this.layoutSection(el, selector) : this.boxSection(el, selector, box, inline, input)}
+      ${this.mode === 'text' ? this.textSection(el, selector) : this.mode === 'layout' ? this.layoutSection(el, selector)
+        : this.mode === 'border' ? this.borderSection(el) : this.boxSection(el, selector, box, inline, input)}
       <div class="muted mono" title="Selector al que se aplicarán los cambios">${escapeHtml(this.ruleSelector!)}${this.screen.media ? ` · solo ${this.screen.label.toLowerCase()} y menores` : ''}</div>
       </div>`;
     part.querySelector('.tab')!.scrollTop = scroll;
@@ -1095,11 +1159,12 @@ export class Editor {
       `<button data-act="set" data-prop="${prop}" data-value="${escapeHtml(value)}" class="${current === value ? 'on' : ''}">${label}</button>`).join('')}</div>`;
   }
 
-  private numberField(prop: string, value: string, placeholder = ''): string {
-    const changed = this.store.get(this.selector!, prop) ? 'changed' : '';
+  private numberField(prop: string, value: string, placeholder = '', opts: { unit?: string; changed?: boolean } = {}): string {
+    const changed = opts.changed ?? !!this.store.get(this.selector!, prop) ? 'changed' : '';
     const step = prop === 'letter-spacing' ? '0.1' : '1';
+    const max = NUMERIC[prop]?.max;
     return `<label class="scrub" data-scrub="${prop}" title="Arrastra a izquierda o derecha para ajustar">${styleLabel(prop)}</label>
-      <span class="unit"><input type="number" step="${step}" min="${NUMERIC[prop]?.min ?? 0}" data-prop="${prop}" value="${value}" placeholder="${placeholder}" class="${changed}" aria-label="${styleLabel(prop)}"><i>px</i></span>`;
+      <span class="unit"><input type="number" step="${step}" min="${NUMERIC[prop]?.min ?? 0}"${max === undefined ? '' : ` max="${max}"`} data-prop="${prop}" value="${value}" placeholder="${placeholder}" class="${changed}" aria-label="${styleLabel(prop)}"><i>${opts.unit ?? 'px'}</i></span>`;
   }
 
   private colorField(prop: string, cs: CSSStyleDeclaration): string {
@@ -1151,6 +1216,48 @@ export class Editor {
       <div class="field"><span>Mayúsculas</span>
         ${this.choice('text-transform', cs.textTransform, [['none', 'Como está'], ['uppercase', 'TODO'], ['capitalize', 'Cada Palabra']])}
       </div>`;
+  }
+
+  private borderSection(el: Element): string {
+    const cs = getComputedStyle(el);
+    const changed = (prop: string) => (this.store.get(this.selector!, prop) ? 'changed' : '');
+    const corners: [string, string][] = [
+      ['border-top-left-radius', '↖'], ['border-top-right-radius', '↗'],
+      ['border-bottom-left-radius', '↙'], ['border-bottom-right-radius', '↘'],
+    ];
+    const pct = cs.borderTopLeftRadius.includes('%') ? cs.borderTopLeftRadius : '';
+    const shadow = parseShadow(cs.boxShadow);
+    const shadowChanged = !!this.store.get(this.selector!, 'box-shadow');
+    const presets = this.borderValues.shadows.map((v) =>
+      `<button class="shadow-swatch${shadow && formatShadow(shadow) === v ? ' on' : ''}" data-act="set" data-prop="box-shadow" data-value="${escapeHtml(v)}" title="Sombra usada en la página: ${escapeHtml(v)}" aria-label="Sombra de la página" style="box-shadow:${escapeHtml(v)}"></button>`).join('');
+    return `
+      <div class="field"><span>Borde</span>
+        ${this.choice('border-style', readValue(cs, 'border-style'), [['none', 'Sin borde'], ['solid', 'Continuo'], ['dashed', 'Discontinuo'], ['dotted', 'Puntos']])}
+      </div>
+      <div class="form">
+        ${this.numberField('border-width', readValue(cs, 'border-width'))}
+        ${this.colorField('border-color', cs)}
+      </div>
+      <div class="field"><span>Esquinas redondeadas</span></div>
+      <div class="form">${this.numberField('border-radius', readValue(cs, 'border-radius'), pct)}</div>
+      <div class="corners">${corners.map(([p, icon]) =>
+        `<span class="muted" title="${styleLabel(p)}">${icon}</span><span class="unit"><input type="number" min="0" data-prop="${p}" value="${readValue(cs, p)}" class="${changed(p)}" aria-label="${styleLabel(p)}"><i>px</i></span>`).join('')}
+      </div>
+      <div class="field"><span>Sombra</span>
+        ${shadow ? `<div class="row">
+          ${this.choice('shadow-inset', shadow.inset ? 'inset' : 'outset', [['outset', 'Fuera'], ['inset', 'Dentro']])}
+          <button data-act="set" data-prop="box-shadow" data-value="none">Quitar sombra</button></div>`
+          : `<div class="row"><button data-act="shadow-add">Añadir sombra</button></div>`}
+      </div>
+      ${shadow ? `<div class="form">
+        ${this.numberField('shadow-x', String(shadow.x), '', { changed: shadowChanged })}
+        ${this.numberField('shadow-y', String(shadow.y), '', { changed: shadowChanged })}
+        ${this.numberField('shadow-blur', String(shadow.blur), '', { changed: shadowChanged })}
+        ${this.numberField('shadow-spread', String(shadow.spread), '', { changed: shadowChanged })}
+        ${this.numberField('shadow-alpha', String(shadow.alpha), '', { changed: shadowChanged, unit: '%' })}
+        <span>Color</span><span class="row nowrap"><input type="color" data-prop="shadow-color" value="${shadow.color}" class="${shadowChanged ? 'changed' : ''}" aria-label="Color de la sombra"><code>${shadow.color}</code></span>
+      </div>` : ''}
+      ${presets ? `<div class="field"><span class="muted">Sombras de la página</span><span class="swatches">${presets}</span></div>` : ''}`;
   }
 
   /** Orden entre sus hermanos: solo existe si el contenedor los coloca en fila, columna o cuadrícula. */
@@ -1296,6 +1403,7 @@ export class Editor {
       const [kind, side] = prop.split('-') as [Kind, Side];
       const v = prop === 'width' ? box.cssWidth : prop === 'height' ? box.cssHeight
         : (kind === 'margin' || kind === 'padding') && SIDES.includes(side) ? box[kind][side]
+        : prop.startsWith('shadow-') ? shadowPart(parseShadow(getComputedStyle(this.selected).boxShadow) ?? DEFAULT_SHADOW, prop as ShadowPart)
         : readValue(getComputedStyle(this.selected), prop);
       inp.value = String(v);
     }

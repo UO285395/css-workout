@@ -49,6 +49,8 @@ test('«Solo este» cambia un único elemento', async ({ page }) => {
   const cards = page.locator('.card');
   await cards.nth(2).click({ position: { x: 6, y: 6 } });
   await ui(page, 'button[data-act="scope-element"]').click();
+  // La tercera tarjeta queda bajo el panel: se pasa al otro lado, como haría el usuario.
+  await ui(page, 'button[data-act="side"]').click();
   await dragBy(page, ui(page, '.zone[data-prop="margin-top"]'), 0, -20);
   expect(await style(cards.nth(2), 'margin-top')).toBe('20px');
   expect(await style(cards.nth(0), 'margin-top')).toBe('0px');
@@ -230,4 +232,98 @@ test('alinear un elemento dentro de una fila flex lo mueve con márgenes automá
   const x0 = (await logo.boundingBox())!.x;
   await ui(page, 'button[data-prop="text-align"][data-value="center"]').click();
   expect((await logo.boundingBox())!.x).toBeGreaterThan(x0 + 100);
+});
+
+test('el panel no cambia de tamaño al cambiar de pestaña ni de elemento', async ({ page }) => {
+  const panel = ui(page, '.panel');
+  const height = async () => (await panel.boundingBox())!.height;
+  const h0 = await height();
+  await page.locator('.card').nth(1).click({ position: { x: 6, y: 6 } });
+  for (const mode of ['size', 'text', 'layout', 'spacing']) {
+    await ui(page, `button[data-act="mode-${mode}"]`).click();
+    expect(await height()).toBe(h0);
+  }
+  await page.locator('.btn').click();
+  await ui(page, 'button[data-act="mode-text"]').click();
+  expect(await height()).toBe(h0);
+  // Sin desplazamiento horizontal ni barra en el panel entero: solo se desplaza la zona de la pestaña.
+  expect(await panel.evaluate((el) => el.scrollWidth <= el.clientWidth && el.scrollHeight <= el.clientHeight)).toBe(true);
+  await expect(ui(page, '.tab')).toHaveCount(1);
+});
+
+test('la pestaña Texto cabe sin desplazarse en una pantalla de 800 px de alto', async ({ page }) => {
+  await page.locator('.card h2').first().click();
+  await ui(page, 'button[data-act="mode-text"]').click();
+  expect(await ui(page, '.tab').evaluate((el) => el.scrollHeight - el.clientHeight)).toBeLessThanOrEqual(0);
+});
+
+test('alinear el texto de una tarjeta no la mueve: su título deja hueco', async ({ page }) => {
+  const card = page.locator('.card').first();
+  const before = (await card.boundingBox())!;
+  await card.click({ position: { x: 6, y: 6 } });
+  await ui(page, 'button[data-act="mode-text"]').click();
+  await expect(ui(page, '[data-hint="text-align"]')).toHaveCount(0);
+  await ui(page, 'button[data-prop="text-align"][data-value="center"]').click();
+  expect(await style(card, 'text-align')).toBe('center');
+  expect(await card.boundingBox()).toEqual(before);
+});
+
+test('«Antes» muestra la página original sin perder los cambios', async ({ page }) => {
+  const h1 = page.locator('.hero h1');
+  await h1.click();
+  await ui(page, 'button[data-act="mode-text"]').click();
+  await ui(page, 'button[data-prop="font-style"][data-value="italic"]').click();
+  expect(await style(h1, 'font-style')).toBe('italic');
+
+  await ui(page, 'button[data-act="compare"]').click();
+  expect(await style(h1, 'font-style')).toBe('normal');
+  await expect(ui(page, '.panel')).toBeHidden();
+  await expect(ui(page, '.sel')).toBeHidden();
+  // Mientras se compara, un clic en la página no selecciona nada.
+  await page.locator('.card').first().click({ position: { x: 6, y: 6 } });
+
+  await ui(page, '.compare-pill').click();
+  expect(await style(h1, 'font-style')).toBe('italic');
+  await expect(ui(page, '.panel')).toBeVisible();
+  await expect(ui(page, '.panel')).toContainText('h1');
+
+  await ui(page, 'button[data-act="compare"]').click();
+  await page.keyboard.press('Escape');
+  expect(await style(h1, 'font-style')).toBe('italic');
+  await expect(ui(page, '.compare-pill')).toBeHidden();
+});
+
+test('en Móvil se edita la página a 375 px y el cambio va dentro de su @media', async ({ page }) => {
+  const cards = page.locator('.card');
+  await cards.nth(1).click({ position: { x: 6, y: 6 } });
+  await ui(page, 'button[data-act="screen"][data-value="mobile"]').click();
+
+  const frame = page.frameLocator('css-workout iframe.frame');
+  await expect(frame.locator('.card').first()).toBeVisible();
+  // La selección pasa al mismo elemento dentro del marco.
+  await expect(ui(page, '.panel')).toContainText('article.card');
+  expect(await ui(page, 'iframe.frame').evaluate((f) => (f as HTMLIFrameElement).contentWindow!.innerWidth)).toBe(375);
+
+  await dragBy(page, ui(page, '.zone[data-prop="padding-top"]'), 0, 8);
+  expect(await style(frame.locator('.card').nth(1), 'padding-top')).toBe('24px');
+  expect(await style(cards.nth(1), 'padding-top')).toBe('16px');
+  expect(await page.evaluate(() => window.cssWorkout!.exportCss())).toContain('@media (max-width: 767px) {\n  .card {\n    padding-top: 24px;');
+  await expect(ui(page, '.change .badge')).toHaveText('Móvil');
+
+  await ui(page, 'button[data-act="screen"][data-value="desktop"]').click();
+  await expect(ui(page, 'iframe.frame')).toHaveCount(0);
+  await expect(ui(page, '.panel')).toContainText('article.card');
+  // En escritorio el cambio de móvil no se aplica.
+  expect(await style(cards.nth(1), 'padding-top')).toBe('16px');
+});
+
+test('en Tableta un clic dentro del marco selecciona y el cambio va a su @media', async ({ page }) => {
+  await ui(page, 'button[data-act="screen"][data-value="tablet"]').click();
+  const frame = page.frameLocator('css-workout iframe.frame');
+  await frame.locator('.hero h1').click();
+  await expect(ui(page, '.panel')).toContainText('h1');
+  await ui(page, 'button[data-act="mode-text"]').click();
+  await ui(page, 'button[data-prop="font-style"][data-value="italic"]').click();
+  expect(await style(frame.locator('.hero h1'), 'font-style')).toBe('italic');
+  expect(await page.evaluate(() => window.cssWorkout!.exportCss())).toContain('@media (max-width: 1023px)');
 });

@@ -1,3 +1,5 @@
+import { SCREENS, parseKey, type Screen } from './screens';
+
 export interface Entry {
   value: string;
   /** Valor que tenía la página antes del primer cambio, para el comentario "antes:". */
@@ -141,16 +143,23 @@ export class ChangeStore {
    * prototipo); sin él es el CSS que el usuario copia.
    */
   toCss({ important = false, comments = false } = {}): string {
-    const blocks: string[] = [];
-    for (const [selector, props] of this.rules) {
+    // Primero las reglas para todos los tamaños y luego cada @media, del más ancho al más estrecho,
+    // para que el tamaño más pequeño gane.
+    const groups = new Map<Screen, string[]>();
+    for (const [key, props] of this.rules) {
       if (props.size === 0) continue;
+      const { selector, screen } = parseKey(key);
       const lines = Array.from(props, ([prop, e]) => {
-        const decl = `  ${prop}: ${e.value}${important ? ' !important' : ''};`;
+        const decl = `${prop}: ${e.value}${important ? ' !important' : ''};`;
         return comments && e.original ? `${decl} /* antes: ${e.original} */` : decl;
       });
-      blocks.push(`${selector} {\n${lines.join('\n')}\n}`);
+      if (!groups.has(screen)) groups.set(screen, []);
+      groups.get(screen)!.push(`${selector} {\n${lines.map((l) => `  ${l}`).join('\n')}\n}`);
     }
-    return blocks.join('\n\n');
+    return SCREENS.filter((sc) => groups.has(sc)).map((sc) => {
+      const blocks = groups.get(sc)!.join('\n\n');
+      return sc.media ? `@media ${sc.media} {\n${blocks.replace(/^(?=.)/gm, '  ')}\n}` : blocks;
+    }).join('\n\n');
   }
 
   private write(selector: string, prop: string, entry: Entry | null): void {

@@ -22,6 +22,17 @@ Atajos: `Alt` arrastra sin imán · `Shift` va de 8 en 8 px · `Esc` suelta la s
 
 «Usar página» desactiva la selección para poder navegar el prototipo con normalidad.
 
+### Móvil y tableta
+
+Los botones **Escritorio · Tableta 768 · Móvil 375** del panel eligen para qué tamaño de pantalla ajustas. Funciona como Webflow:
+
+- **Escritorio** edita la página en la ventana real, y los cambios valen para todos los tamaños.
+- **Tableta** y **Móvil** muestran la página a 768 o 375 px dentro de un marco, y editas ahí. Los cambios se guardan dentro de su `@media` (`max-width: 1023px` y `max-width: 767px`) y valen para ese tamaño y los menores.
+
+El elemento seleccionado se mantiene al cambiar de tamaño. En la lista de cambios, los de tableta y móvil llevan su etiqueta, y el CSS copiado los agrupa en sus `@media` después de las reglas generales.
+
+«Antes», junto a Copiar CSS, muestra la página original sin tus cambios y oculta el panel, para enseñar la diferencia. «Volver a mis cambios» o `Esc` los vuelve a mostrar; no se pierde nada.
+
 ### El imán
 
 Como los prototipos no siempre tienen una escala de espaciado fija, al arrastrar el valor se «pega» a los espaciados que ya usa la página (márgenes, rellenos y gaps de todos sus elementos) cuando pasa a menos de 3 px. Así no aparecen valores sueltos como 17 px. El aviso «ya usado en la página» indica cuándo ha ocurrido.

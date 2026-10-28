@@ -1,3 +1,5 @@
+import { SCREENS, parseKey, type Screen } from './screens';
+
 export interface Entry {
   value: string;
   /** Valor que tenía la página antes del primer cambio, para el comentario "antes:". */
@@ -65,8 +67,19 @@ export class ChangeStore {
   }
 
   recordMany(selector: string, items: readonly { prop: string; before: Entry | null }[]): void {
+    this.commit(items.map((it) => ({ selector, ...it })));
+  }
+
+  /** Cambia propiedades de varias reglas como un solo paso (p. ej. el orden de varios hermanos). */
+  setAcross(items: readonly { selector: string; prop: string; value: string; original: string }[]): void {
+    const befores = items.map(({ selector, prop }) => ({ selector, prop, before: this.get(selector, prop) }));
+    for (const it of items) this.preview(it.selector, it.prop, it.value, it.original);
+    this.commit(befores);
+  }
+
+  private commit(items: readonly { selector: string; prop: string; before: Entry | null }[]): void {
     const cmd: Command = [];
-    for (const { prop, before } of items) {
+    for (const { selector, prop, before } of items) {
       let after = this.get(selector, prop);
       if (before?.value === after?.value) continue;
       // Un cambio que vuelve al valor original deja de ser un cambio.
@@ -140,17 +153,24 @@ export class ChangeStore {
    * CSS de los cambios. Con `important` se usa para la vista previa (gana a las reglas del
    * prototipo); sin él es el CSS que el usuario copia.
    */
-  toCss({ important = false, comments = false } = {}): string {
-    const blocks: string[] = [];
-    for (const [selector, props] of this.rules) {
+  toCss({ important = false, comments = false, mapSelector = (sel: string) => sel } = {}): string {
+    // Primero las reglas para todos los tamaños y luego cada @media, del más ancho al más estrecho,
+    // para que el tamaño más pequeño gane.
+    const groups = new Map<Screen, string[]>();
+    for (const [key, props] of this.rules) {
       if (props.size === 0) continue;
+      const { selector, screen } = parseKey(key);
       const lines = Array.from(props, ([prop, e]) => {
-        const decl = `  ${prop}: ${e.value}${important ? ' !important' : ''};`;
+        const decl = `${prop}: ${e.value}${important ? ' !important' : ''};`;
         return comments && e.original ? `${decl} /* antes: ${e.original} */` : decl;
       });
-      blocks.push(`${selector} {\n${lines.join('\n')}\n}`);
+      if (!groups.has(screen)) groups.set(screen, []);
+      groups.get(screen)!.push(`${mapSelector(selector)} {\n${lines.map((l) => `  ${l}`).join('\n')}\n}`);
     }
-    return blocks.join('\n\n');
+    return SCREENS.filter((sc) => groups.has(sc)).map((sc) => {
+      const blocks = groups.get(sc)!.join('\n\n');
+      return sc.media ? `@media ${sc.media} {\n${blocks.replace(/^(?=.)/gm, '  ')}\n}` : blocks;
+    }).join('\n\n');
   }
 
   private write(selector: string, prop: string, entry: Entry | null): void {

@@ -4,6 +4,7 @@ import { collectSpacingValues, snap } from './snapping';
 import { selectorFor, defaultScope, classSelector, describe, type Scope } from './selector';
 import { UI_CSS } from './styles';
 import { collectVariables, lengthVar, type CssVariable } from './variables';
+import { trackSizes, gapRects } from './grid';
 import { SCREENS, screenFor, ruleKey, parseKey, type Screen } from './screens';
 import {
   styleLabel, readValue, originalValue, collectFonts, collectFontSizes, axisProp, isFlex, isGrid,
@@ -223,6 +224,7 @@ export class Editor {
     zones: Record<Kind, Record<Side, HTMLElement>>;
     size: { w: HTMLElement; h: HTMLElement; wh: HTMLElement };
     twins: HTMLElement[];
+    gaps: HTMLElement[];
   };
 
   constructor(private doc: Document = document) {
@@ -434,7 +436,7 @@ export class Editor {
     this.ov = {
       hover: h('div', 'hover', L), hoverTag: h('div', 'hover-tag', L),
       sel: h('div', 'sel', L), dims: h('div', 'dims', L), tip: h('div', 'tip', this.layer),
-      areas, zones, size, twins: [],
+      areas, zones, size, twins: [], gaps: [],
     };
     this.ov.tip.style.display = 'none';
   }
@@ -484,6 +486,7 @@ export class Editor {
     }
     this.placeSizeHandles(sizing ? box : null);
     this.renderTwins(el);
+    this.renderGridGaps(this.mode === 'layout' ? el : null);
   }
 
   private placeSizeHandles(box: BoxModel | null): void {
@@ -494,6 +497,41 @@ export class Editor {
     w.style.left = `${b.x + b.w - 5}px`; w.style.top = `${b.y + b.h / 2 - 11}px`;
     hh.style.left = `${b.x + b.w / 2 - 11}px`; hh.style.top = `${b.y + b.h - 5}px`;
     wh.style.left = `${b.x + b.w - 6}px`; wh.style.top = `${b.y + b.h - 6}px`;
+  }
+
+  /** En una cuadrícula, los huecos entre columnas y filas se ven y se arrastran para cambiar la separación. */
+  private renderGridGaps(el: Element | null): void {
+    const cs = el ? getComputedStyle(el) : null;
+    let rects: { r: Rect; prop: 'column-gap' | 'row-gap' }[] = [];
+    if (el && cs && isGrid(cs.display)) {
+      const box = measure(el);
+      const origin = { x: box.border.x + box.borderWidth.left + box.padding.left, y: box.border.y + box.borderWidth.top + box.padding.top };
+      const g = gapRects(trackSizes(cs.gridTemplateColumns), trackSizes(cs.gridTemplateRows),
+        parseFloat(cs.columnGap) || 0, parseFloat(cs.rowGap) || 0, origin, HIT_MIN);
+      rects = [...g.columns.map((r) => ({ r, prop: 'column-gap' as const })), ...g.rows.map((r) => ({ r, prop: 'row-gap' as const }))];
+    }
+    while (this.ov.gaps.length < rects.length) {
+      const z = h('div', 'grid-gap', this.ovRoot);
+      z.addEventListener('pointerdown', (e) => this.startGapDrag(e, z.dataset.prop as 'column-gap' | 'row-gap'));
+      this.ov.gaps.push(z);
+    }
+    this.ov.gaps.forEach((z, i) => {
+      const it = rects[i];
+      if (!it) return place(z, null);
+      z.dataset.prop = it.prop;
+      z.className = `grid-gap ${it.prop === 'column-gap' ? 'x' : 'y'}`;
+      z.title = `${propLabel(it.prop)}: arrastra para ajustar`;
+      place(z, it.r);
+    });
+  }
+
+  private startGapDrag(e: PointerEvent, prop: 'column-gap' | 'row-gap'): void {
+    if (!this.selected) return;
+    const start = parseFloat(getComputedStyle(this.selected).getPropertyValue(prop)) || 0;
+    this.beginDrag(e, [prop], [start], (dx, dy, ev) => {
+      const r = snap(start + (prop === 'column-gap' ? dx : dy), this.candidates, { free: ev.altKey, coarse: ev.shiftKey, min: 0 });
+      return { values: [r.value], snapped: r.snapped, vars: [this.varFor(r.value, r.snapped && !ev.altKey)] };
+    });
   }
 
   /** Con ámbito "por clase", marca con línea discontinua el resto de elementos afectados. */
@@ -517,6 +555,7 @@ export class Editor {
     }
     this.placeSizeHandles(null);
     for (const t of this.ov.twins) place(t, null);
+    this.renderGridGaps(null);
   }
 
   private matches(): Element[] {
@@ -757,6 +796,7 @@ export class Editor {
         break;
       case 'children': this.setChildren(btn.dataset.value!); break;
       case 'order': this.reorder(btn.dataset.value!); break;
+      case 'grid-cols': this.setGridColumns(Number(btn.dataset.value)); break;
       case 'hover': this.hoverState = !this.hoverState; this.tabView = ''; break;
       case 'scope-class': this.scope = 'class'; break;
       case 'scope-element': this.scope = 'element'; break;
@@ -843,10 +883,18 @@ export class Editor {
     const selector = this.selector!;
     const cs = getComputedStyle(this.selected);
     const orig = (prop: string) => this.store.get(selector, prop)?.original ?? cs.getPropertyValue(prop);
+    if (how === 'grid') {
+      const n = Math.min(3, Math.max(1, this.selected.children.length));
+      this.store.setMany(selector, [
+        { prop: 'display', value: 'grid', original: orig('display') },
+        { prop: 'grid-template-columns', value: `repeat(${n}, 1fr)`, original: orig('grid-template-columns') },
+      ]);
+      return;
+    }
     if (how === 'normal') {
-      const items = ['display', 'flex-direction'].filter((p) => this.store.get(selector, p));
+      const items = ['display', 'flex-direction', 'grid-template-columns'].filter((p) => this.store.get(selector, p));
       // Si la página ya lo tenía en fila o columna, "uno debajo de otro" es volver a bloque.
-      if (items.length === 0) return isFlex(cs.display) ? this.commit('display', 'block') : undefined;
+      if (items.length === 0) return isFlex(cs.display) || isGrid(cs.display) ? this.commit('display', 'block') : undefined;
       // Volver a la caja original es quitar los cambios de display y dirección.
       this.store.setMany(selector, items.map((p) => ({ prop: p, value: orig(p), original: orig(p) })));
       return;
@@ -878,7 +926,7 @@ export class Editor {
     const raw = readValue(cs, prop);
     const start = raw === '' ? Math.round(parseFloat(cs.fontSize) * 1.2) : Number(raw);
     const min = NUMERIC[prop]?.min ?? 0;
-    const candidates = prop === 'font-size' ? this.fontSizes : prop === 'gap' ? this.candidates : [];
+    const candidates = prop === 'font-size' ? this.fontSizes : prop.endsWith('gap') ? this.candidates : [];
     // Cada 2 px de ratón cambian 1 px de valor: más preciso que 1:1 en valores pequeños.
     this.beginDrag(e, [prop], [start], (dx, _dy, ev) => {
       const r = snap(start + dx / 2, candidates, { free: ev.altKey, coarse: ev.shiftKey, min });
@@ -1063,9 +1111,10 @@ export class Editor {
     if (!parent || sibs.length < 2 || !sibs.includes(el)) return '';
     const pcs = getComputedStyle(parent);
     if (!isFlex(pcs.display) && !isGrid(pcs.display)) {
-      return `<div class="field"><span>Orden</span><div class="hint-box">Para cambiar el orden, su contenedor tiene que colocar los elementos en fila o en columna: pulsa «↑ Padre» y elige «En fila» o «En columna».</div></div>`;
+      return `<div class="note">Para cambiar el orden de este elemento, pon su contenedor («↑ Padre») en fila, columna o cuadrícula.</div>`;
     }
     const i = sibs.indexOf(el);
+    const span = isGrid(pcs.display) ? this.spanField(el, pcs) : '';
     const where = isGrid(pcs.display) ? 'la cuadrícula' : pcs.flexDirection.startsWith('column') ? 'su columna' : 'su fila';
     const changed = this.store.get(this.orderKey(el), 'order');
     const btn = (how: string, label: string, off: boolean, title: string) =>
@@ -1079,7 +1128,24 @@ export class Editor {
           ${btn('last', 'Último ⇥', i === sibs.length - 1, 'Mover al final')}
         </div>
         <div class="note">Se aplica solo a este elemento, aunque arriba esté elegido «Todos».${changed ? ' <button class="link" data-act="order" data-value="reset">Orden original</button>' : ''}</div>
-      </div>`;
+      </div>${span}`;
+  }
+
+  /** En una cuadrícula: cuántas columnas ocupa el elemento. */
+  private spanField(el: Element, pcs: CSSStyleDeclaration): string {
+    const cols = trackSizes(pcs.gridTemplateColumns).length;
+    if (cols < 2) return '';
+    const m = getComputedStyle(el).gridColumnEnd.match(/span (\d+)/);
+    const current = m ? m[1] : '1';
+    const opts = Array.from({ length: Math.min(cols, 4) }, (_, k) => String(k + 1));
+    return `<div class="field"><span>Ocupa <span class="muted">columnas de la cuadrícula</span></span>
+      ${this.choice('grid-column', current === '1' ? 'auto' : `span ${current}`, opts.map((n) => [n === '1' ? 'auto' : `span ${n}`, n === '1' ? '1 columna' : `${n} columnas`]))}</div>`;
+  }
+
+  private setGridColumns(delta: number): void {
+    if (!this.selected) return;
+    const n = Math.min(12, Math.max(1, trackSizes(getComputedStyle(this.selected).gridTemplateColumns).length + delta));
+    this.commit('grid-template-columns', `repeat(${n}, 1fr)`);
   }
 
   /** El orden siempre va por elemento: con la misma regla para todos los hermanos no cambiaría nada. */
@@ -1118,8 +1184,8 @@ export class Editor {
     const grid = isGrid(cs.display);
     const childCount = el.children.length;
     const children = flex ? (cs.flexDirection.startsWith('column') ? 'column' : 'row') : grid ? 'grid' : 'normal';
-    const childButtons = `<div class="toggle">${([['normal', 'Uno debajo de otro'], ['row', 'En fila'], ['column', 'En columna']] as const)
-      .map(([v, l]) => `<button data-act="children" data-value="${v}" class="${children === v ? 'on' : ''}">${l}</button>`).join('')}</div>`;
+    const childButtons = `<div class="field"><div class="toggle">${([['normal', 'Apilados'], ['row', 'En fila'], ['column', 'En columna'], ['grid', 'Cuadrícula']] as const)
+      .map(([v, l]) => `<button data-act="children" data-value="${v}" class="${children === v ? 'on' : ''}">${l}</button>`).join('')}</div></div>`;
 
     let alignment = '';
     if (flex) {
@@ -1144,19 +1210,32 @@ export class Editor {
         <div class="row"><span class="muted lbl">Vertical</span>${this.choice(v, norm(v), opts(v))}</div>
         ${tight('vertical')}`;
     }
-    const gap = flex || grid
+    const cols = trackSizes(cs.gridTemplateColumns).length;
+    const gap = flex
       ? `<div class="form">${this.numberField('gap', readValue(cs, 'gap'))}</div>`
-      : '';
+      : grid
+        ? `<div class="form">
+            <span>Columnas</span>
+            <span class="row nowrap stepper${this.store.get(this.selector!, 'grid-template-columns') ? ' changed' : ''}">
+              <button data-act="grid-cols" data-value="-1" ${cols <= 1 ? 'disabled' : ''} aria-label="Una columna menos">−</button>
+              <b>${cols}</b>
+              <button data-act="grid-cols" data-value="1" ${cols >= 12 ? 'disabled' : ''} aria-label="Una columna más">+</button>
+              <span class="muted">iguales</span></span>
+            ${this.numberField('column-gap', readValue(cs, 'column-gap'))}
+            ${this.numberField('row-gap', readValue(cs, 'row-gap'))}
+          </div>
+          <div class="note">También puedes arrastrar los huecos morados entre columnas y filas.</div>`
+        : '';
     const order = this.orderSection(el);
     if (childCount === 0) {
       return `${order}<div class="empty">Este elemento no contiene otros elementos. Pulsa «↑ Padre» para alinear el contenedor en el que está.</div>`;
     }
     return `${order}
       <div class="row"><span class="muted">Colocar ${childCount === 1 ? 'el elemento de dentro' : `los ${childCount} elementos de dentro`}</span></div>
-      ${grid ? '<div class="muted">Este elemento usa una cuadrícula (grid). Aquí solo se ajusta la separación.</div>' : childButtons}
+      ${childButtons}
       ${alignment}
       ${gap}
-      ${!flex && !grid ? '<div class="muted">Elige «En fila» o «En columna» para poder alinear y separar los elementos de dentro.</div>' : ''}`;
+      ${!flex && !grid ? '<div class="muted">Elige «En fila», «En columna» o «Cuadrícula» para poder alinear y separar los elementos de dentro.</div>' : ''}`;
   }
 
   private syncInputs(part: HTMLElement, except: HTMLInputElement | null): void {

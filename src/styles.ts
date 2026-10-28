@@ -23,6 +23,12 @@ export const UI_CSS = `
 .zone.margin::after { background: #e8873a; }
 .zone.padding::after { background: #5a9a3d; }
 .zone:hover { background: rgba(0,0,0,.06); }
+.grid-gap { position: fixed; pointer-events: auto; background: rgba(168,85,247,.28); }
+.grid-gap.x { cursor: ew-resize; z-index: 1; }
+.grid-gap.y { cursor: ns-resize; }
+.grid-gap:hover { background: rgba(168,85,247,.5); }
+.stepper b { min-width: 18px; text-align: center; }
+.stepper.changed b { color: #3b82f6; }
 
 .size { position: fixed; pointer-events: auto; background: #fff; border: 2px solid #3b82f6; border-radius: 3px; }
 .size.w { cursor: ew-resize; width: 10px; height: 22px; }

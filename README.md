@@ -12,7 +12,7 @@ Pensado para gente que entiende qué es un margen o un relleno pero no escribe C
    - **Espaciado:** arrastra las zonas naranjas (margen) y verdes (relleno) de cada lado.
    - **Tamaño:** arrastra los tiradores azules del borde derecho, inferior o la esquina.
    - **Texto:** tamaño de letra, grosor, fuente, interlineado, espacio entre letras, color del texto y del fondo, alineación, cursiva, subrayado y mayúsculas. Si el elemento mide lo mismo que su texto (un botón, un enlace, un logo), alinear mueve el elemento entero dentro de su contenedor.
-   - **Alineación:** coloca los elementos de dentro uno debajo de otro, en fila o en columna; repártelos y alinéalos en horizontal y vertical, y ajusta la separación entre ellos. Si el contenedor del elemento lo coloca en fila, columna o cuadrícula, también puedes cambiar su **orden** (primero, antes, después, último) sin tocar el HTML.
+   - **Alineación:** coloca los elementos de dentro uno debajo de otro, en fila o en columna; repártelos y alinéalos en horizontal y vertical, y ajusta la separación entre ellos. Si el contenedor del elemento lo coloca en fila, columna o cuadrícula, también puedes cambiar su **orden** (primero, antes, después, último) sin tocar el HTML. En una **cuadrícula** eliges el número de columnas, la separación entre columnas y filas (también arrastrando los huecos morados) y cuántas columnas ocupa cada hijo.
 
    Los valores numéricos se pueden escribir o ajustar arrastrando a izquierda o derecha sobre su nombre.
    **Hover**, junto a «↑ Padre», edita cómo se ve el elemento al pasar el ratón por encima: lo muestra en ese estado mientras ajustas y el CSS sale como `:hover`.

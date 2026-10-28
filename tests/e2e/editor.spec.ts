@@ -397,3 +397,30 @@ test('las variables CSS del prototipo se usan al arrastrar y como muestras de co
   expect(await page.evaluate(() => window.cssWorkout!.exportCss())).toContain('background-color: var(--azul);');
   await expect(ui(page, 'button.swatch.on[data-prop="background-color"]')).toHaveAttribute('data-value', 'var(--azul)');
 });
+
+test('cuadrícula: número de columnas, huecos arrastrables y columnas que ocupa un hijo', async ({ page }) => {
+  const cards = page.locator('.cards');
+  await cards.click({ position: { x: 10, y: 10 } });
+  await ui(page, 'button[data-act="mode-layout"]').click();
+  await expect(ui(page, 'button[data-act="children"][data-value="grid"]')).toHaveClass(/on/);
+  await expect(ui(page, '.stepper b')).toHaveText('3');
+
+  const card = page.locator('.card');
+  await ui(page, 'button[data-act="grid-cols"][data-value="-1"]').click();
+  await expect(ui(page, '.stepper b')).toHaveText('2');
+  expect((await card.nth(2).boundingBox())!.y).toBeGreaterThan((await card.nth(0).boundingBox())!.y + 50);
+  expect(await page.evaluate(() => window.cssWorkout!.exportCss())).toContain('grid-template-columns: repeat(2, 1fr);');
+
+  // El hueco entre columnas se arrastra: 24 px + 8 = 32 px.
+  await dragBy(page, ui(page, '.grid-gap.x').first(), 8, 0);
+  expect(await style(cards, 'column-gap')).toBe('32px');
+  await page.keyboard.press('Control+z');
+  expect(await style(cards, 'column-gap')).toBe('24px');
+
+  // Un hijo puede ocupar dos columnas.
+  await card.nth(0).click({ position: { x: 6, y: 6 } });
+  await ui(page, 'button[data-act="scope-element"]').click();
+  const w0 = (await card.nth(0).boundingBox())!.width;
+  await ui(page, 'button[data-prop="grid-column"][data-value="span 2"]').click();
+  expect((await card.nth(0).boundingBox())!.width).toBeGreaterThan(w0 * 1.8);
+});

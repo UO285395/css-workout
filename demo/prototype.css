@@ -14,4 +14,4 @@ body { margin: 0; font-family: system-ui, sans-serif; color: #222; background: #
 .card { background: #fff; border: 1px solid #e5e5e5; border-radius: 12px; padding: 16px; }
 .card h2 { margin: 0 0 8px; font-size: 18px; }
 .card p { margin: 0; color: #555; }
-.card--featured { border-color: #2563eb; }
+.card--featured { border-color: #2563eb; box-shadow: 0 8px 24px rgba(37, 99, 235, 0.15); }

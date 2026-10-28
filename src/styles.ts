@@ -125,6 +125,10 @@ input[type=color].changed { border-color: #3b82f6; }
 .swatches { display: flex; gap: 3px; flex-wrap: nowrap; }
 .swatch { width: 18px; height: 18px; padding: 0; border: 1px solid rgba(0,0,0,.18); border-radius: 4px; }
 .swatch.on { outline: 2px solid #3b82f6; outline-offset: 1px; }
+.corners { display: grid; grid-template-columns: 16px 1fr 16px 1fr; gap: 6px 8px; align-items: center; margin-bottom: 10px; }
+.corners .muted { text-align: center; }
+.shadow-swatch { width: 26px; height: 20px; padding: 0; margin: 6px 4px; border: 1px solid #e5e5e5; border-radius: 4px; background: #fff; }
+.shadow-swatch.on { outline: 2px solid #3b82f6; outline-offset: 2px; }
 .lbl { width: 66px; }
 .hint { color: #6e6e73; font-size: 11px; margin: -4px 0 0 72px; }
 .grid { display: grid; grid-template-columns: 62px repeat(4, 1fr); gap: 4px; align-items: center; }

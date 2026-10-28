@@ -440,3 +440,43 @@ test('con Alt se miden las distancias hasta otro elemento y hasta el contenedor'
   await page.keyboard.up('Alt');
   await expect(ui(page, '.measure-label:visible')).toHaveCount(0);
 });
+
+test('bordes, esquinas y sombra: grosor, radio con imán y sombra ajustable', async ({ page }) => {
+  const title = page.locator('h1');
+  await title.click();
+  await ui(page, 'button[data-act="mode-border"]').click();
+
+  // Un elemento sin borde: darle grosor añade también una línea continua.
+  await ui(page, 'input[data-prop="border-width"]').fill('2');
+  await ui(page, 'input[data-prop="border-width"]').press('Tab');
+  expect(await style(title, 'border-top-style')).toBe('solid');
+  expect(await style(title, 'border-top-width')).toBe('2px');
+  await expect(ui(page, 'button[data-prop="border-style"].on')).toHaveText('Continuo');
+  // Un solo paso de deshacer quita el grosor y la línea.
+  await page.keyboard.press('Escape');
+  await title.click();
+  await page.keyboard.press('Control+z');
+  expect(await style(title, 'border-top-style')).toBe('none');
+
+  // El radio se pega a los que ya usa la página (8 y 12 px).
+  await ui(page, 'button[data-act="mode-border"]').click();
+  await dragBy(page, ui(page, 'label[data-scrub="border-radius"]'), 22, 0);
+  expect(await style(title, 'border-top-left-radius')).toBe('12px');
+  await ui(page, 'input[data-prop="border-bottom-right-radius"]').fill('0');
+  await ui(page, 'input[data-prop="border-bottom-right-radius"]').press('Enter');
+  expect(await style(title, 'border-bottom-right-radius')).toBe('0px');
+  expect(await style(title, 'border-top-left-radius')).toBe('12px');
+
+  // Sombra: se añade, se ajusta cada parte y se reutiliza la de la página.
+  await ui(page, 'button[data-act="shadow-add"]').click();
+  expect(await style(title, 'box-shadow')).toBe('rgba(0, 0, 0, 0.15) 0px 4px 12px 0px');
+  await ui(page, 'input[data-prop="shadow-blur"]').fill('20');
+  await ui(page, 'input[data-prop="shadow-blur"]').press('Enter');
+  expect(await style(title, 'box-shadow')).toBe('rgba(0, 0, 0, 0.15) 0px 4px 20px 0px');
+  await ui(page, 'button[data-prop="shadow-inset"][data-value="inset"]').click();
+  expect(await style(title, 'box-shadow')).toContain('inset');
+  await ui(page, 'button.shadow-swatch').first().click();
+  expect(await style(title, 'box-shadow')).toBe('rgba(37, 99, 235, 0.15) 0px 8px 24px 0px');
+  await expect(ui(page, 'button.shadow-swatch.on')).toHaveCount(1);
+  expect(await page.evaluate(() => window.cssWorkout!.exportCss())).toContain('box-shadow: 0px 8px 24px 0px rgba(37, 99, 235, 0.15);');
+});

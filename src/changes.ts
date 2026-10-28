@@ -67,8 +67,19 @@ export class ChangeStore {
   }
 
   recordMany(selector: string, items: readonly { prop: string; before: Entry | null }[]): void {
+    this.commit(items.map((it) => ({ selector, ...it })));
+  }
+
+  /** Cambia propiedades de varias reglas como un solo paso (p. ej. el orden de varios hermanos). */
+  setAcross(items: readonly { selector: string; prop: string; value: string; original: string }[]): void {
+    const befores = items.map(({ selector, prop }) => ({ selector, prop, before: this.get(selector, prop) }));
+    for (const it of items) this.preview(it.selector, it.prop, it.value, it.original);
+    this.commit(befores);
+  }
+
+  private commit(items: readonly { selector: string; prop: string; before: Entry | null }[]): void {
     const cmd: Command = [];
-    for (const { prop, before } of items) {
+    for (const { selector, prop, before } of items) {
       let after = this.get(selector, prop);
       if (before?.value === after?.value) continue;
       // Un cambio que vuelve al valor original deja de ser un cambio.

@@ -327,3 +327,35 @@ test('en Tableta un clic dentro del marco selecciona y el cambio va a su @media'
   expect(await style(frame.locator('.hero h1'), 'font-style')).toBe('italic');
   expect(await page.evaluate(() => window.cssWorkout!.exportCss())).toContain('@media (max-width: 1023px)');
 });
+
+test('reordenar una tarjeta dentro de la cuadrícula con order', async ({ page }) => {
+  const cards = page.locator('.card');
+  const x = async (i: number) => (await cards.nth(i).boundingBox())!.x;
+  const [x0, x1] = [await x(0), await x(1)];
+  await cards.nth(2).click({ position: { x: 6, y: 6 } });
+  await ui(page, 'button[data-act="mode-layout"]').click();
+  await expect(ui(page, '.panel')).toContainText('3.º de 3');
+
+  await ui(page, 'button[data-act="order"][data-value="first"]').click();
+  expect(await x(2)).toBe(x0);
+  expect(await x(0)).toBe(x1);
+  await expect(ui(page, '.panel')).toContainText('1.º de 3');
+  // Solo una regla, para este elemento aunque el ámbito sea la clase.
+  await expect(ui(page, '.change')).toHaveCount(1);
+
+  await ui(page, 'button[data-act="order"][data-value="next"]').click();
+  expect(await x(0)).toBe(x0);
+  expect(await x(2)).toBe(x1);
+  await expect(ui(page, '.panel')).toContainText('2.º de 3');
+
+  await page.keyboard.press('Control+z');
+  expect(await x(2)).toBe(x0);
+  await ui(page, 'button[data-act="order"][data-value="reset"]').click();
+  await expect(ui(page, '.panel')).toContainText('3.º de 3');
+});
+
+test('si el contenedor no está en fila o columna, explica cómo reordenar', async ({ page }) => {
+  await page.locator('.hero h1').click();
+  await ui(page, 'button[data-act="mode-layout"]').click();
+  await expect(ui(page, '.panel')).toContainText('Para cambiar el orden');
+});

@@ -54,3 +54,20 @@ describe('ChangeStore', () => {
     expect(s.get('a', 'display')?.value).toBe('inline-block');
   });
 });
+
+describe('ChangeStore.setAcross', () => {
+  it('cambia varias reglas en un solo paso de deshacer', () => {
+    const s = new ChangeStore();
+    s.setAcross([
+      { selector: '.a', prop: 'order', value: '1', original: '0' },
+      { selector: '.b', prop: 'order', value: '0', original: '0' },
+      { selector: '.c', prop: 'order', value: '2', original: '0' },
+    ]);
+    // El que queda en su valor original no cuenta como cambio.
+    expect(s.rows().map((r) => r.selector)).toEqual(['.a', '.c']);
+    s.undo();
+    expect(s.size).toBe(0);
+    s.redo();
+    expect(s.get('.c', 'order')?.value).toBe('2');
+  });
+});

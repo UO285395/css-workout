@@ -77,6 +77,9 @@ export const UI_CSS = `
 .field { display: grid; gap: 4px; }
 .field .toggle { display: flex; }
 .field .toggle button { flex: 1; }
+.note { color: #6e6e73; font-size: 11px; }
+button.link { border: 0; background: none; padding: 0; color: #3b82f6; text-decoration: underline; font-size: inherit; }
+button.link:hover:not(:disabled) { background: none; }
 .row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .row.nowrap { flex-wrap: nowrap; }
 .muted { color: #6e6e73; }

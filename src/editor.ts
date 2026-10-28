@@ -68,6 +68,12 @@ const resolvePath = (doc: Document, path: number[]): Element | null => {
   for (const i of path) e = e?.children[i] ?? null;
   return e && e !== doc.documentElement ? e : null;
 };
+/** Hijos que ocupan sitio en el flujo, en el orden en que se ven (propiedad `order` y luego el HTML). */
+const orderedSiblings = (parent: Element): Element[] => Array.from(parent.children)
+  .map((el, i) => ({ el, i, cs: getComputedStyle(el) }))
+  .filter(({ cs }) => cs.display !== 'none' && cs.position !== 'absolute' && cs.position !== 'fixed')
+  .sort((a, b) => (Number(a.cs.order) || 0) - (Number(b.cs.order) || 0) || a.i - b.i)
+  .map(({ el }) => el);
 const escapeHtml = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
 
 interface Drag {
@@ -685,6 +691,7 @@ export class Editor {
         else this.commit(btn.dataset.prop!, btn.dataset.value!);
         break;
       case 'children': this.setChildren(btn.dataset.value!); break;
+      case 'order': this.reorder(btn.dataset.value!); break;
       case 'scope-class': this.scope = 'class'; break;
       case 'scope-element': this.scope = 'element'; break;
       case 'undo': this.store.undo(); break;
@@ -972,6 +979,62 @@ export class Editor {
       </div>`;
   }
 
+  /** Orden entre sus hermanos: solo existe si el contenedor los coloca en fila, columna o cuadrícula. */
+  private orderSection(el: Element): string {
+    const parent = el.parentElement;
+    const sibs = parent ? orderedSiblings(parent) : [];
+    if (!parent || sibs.length < 2 || !sibs.includes(el)) return '';
+    const pcs = getComputedStyle(parent);
+    if (!isFlex(pcs.display) && !isGrid(pcs.display)) {
+      return `<div class="field"><span>Orden</span><div class="hint-box">Para cambiar el orden, su contenedor tiene que colocar los elementos en fila o en columna: pulsa «↑ Padre» y elige «En fila» o «En columna».</div></div>`;
+    }
+    const i = sibs.indexOf(el);
+    const where = isGrid(pcs.display) ? 'la cuadrícula' : pcs.flexDirection.startsWith('column') ? 'su columna' : 'su fila';
+    const changed = this.store.get(this.orderKey(el), 'order');
+    const btn = (how: string, label: string, off: boolean, title: string) =>
+      `<button data-act="order" data-value="${how}" title="${title}" ${off ? 'disabled' : ''}>${label}</button>`;
+    return `
+      <div class="field"><span>Orden <span class="muted">· ${i + 1}.º de ${sibs.length} en ${where}</span></span>
+        <div class="toggle${changed ? ' changed' : ''}">
+          ${btn('first', '⇤ Primero', i === 0, 'Mover al principio')}
+          ${btn('prev', '← Antes', i === 0, 'Una posición antes')}
+          ${btn('next', 'Después →', i === sibs.length - 1, 'Una posición después')}
+          ${btn('last', 'Último ⇥', i === sibs.length - 1, 'Mover al final')}
+        </div>
+        <div class="note">Se aplica solo a este elemento, aunque arriba esté elegido «Todos».${changed ? ' <button class="link" data-act="order" data-value="reset">Orden original</button>' : ''}</div>
+      </div>`;
+  }
+
+  /** El orden siempre va por elemento: con la misma regla para todos los hermanos no cambiaría nada. */
+  private orderKey(el: Element): string {
+    return ruleKey(selectorFor(el, 'element'), this.screen);
+  }
+
+  /** Cambia el orden con la propiedad `order`, sin tocar el HTML. */
+  private reorder(how: string): void {
+    const el = this.selected;
+    const parent = el?.parentElement;
+    if (!el || !parent) return;
+    const sibs = orderedSiblings(parent);
+    const i = sibs.indexOf(el);
+    if (i < 0) return;
+    const key = this.orderKey(el);
+    const item = (sib: Element, value: number) => {
+      const k = this.orderKey(sib);
+      return { selector: k, prop: 'order', value: String(value), original: this.store.get(k, 'order')?.original ?? getComputedStyle(sib).order };
+    };
+    if (how === 'reset') return this.store.remove(key, 'order');
+    const others = sibs.filter((s) => s !== el).map((s) => Number(getComputedStyle(s).order) || 0);
+    if (how === 'first') return this.store.setAcross([item(el, Math.min(...others) - 1)]);
+    if (how === 'last') return this.store.setAcross([item(el, Math.max(...others) + 1)]);
+    // Un paso: se intercambia con el vecino y se numeran todos los hermanos en el orden nuevo.
+    const j = how === 'prev' ? i - 1 : i + 1;
+    if (j < 0 || j >= sibs.length) return;
+    const next = sibs.slice();
+    [next[i], next[j]] = [next[j], next[i]];
+    this.store.setAcross(next.map((sib, n) => item(sib, n)).filter((it, n) => getComputedStyle(next[n]).order !== it.value || this.store.get(it.selector, 'order')));
+  }
+
   private layoutSection(el: Element, _selector: string): string {
     const cs = getComputedStyle(el);
     const flex = isFlex(cs.display);
@@ -1007,10 +1070,11 @@ export class Editor {
     const gap = flex || grid
       ? `<div class="form">${this.numberField('gap', readValue(cs, 'gap'))}</div>`
       : '';
+    const order = this.orderSection(el);
     if (childCount === 0) {
-      return '<div class="empty">Este elemento no contiene otros elementos. Pulsa «↑ Padre» para alinear el contenedor en el que está.</div>';
+      return `${order}<div class="empty">Este elemento no contiene otros elementos. Pulsa «↑ Padre» para alinear el contenedor en el que está.</div>`;
     }
-    return `
+    return `${order}
       <div class="row"><span class="muted">Colocar ${childCount === 1 ? 'el elemento de dentro' : `los ${childCount} elementos de dentro`}</span></div>
       ${grid ? '<div class="muted">Este elemento usa una cuadrícula (grid). Aquí solo se ajusta la separación.</div>' : childButtons}
       ${alignment}

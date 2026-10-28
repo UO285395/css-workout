@@ -114,6 +114,9 @@ select { width: 100%; font: inherit; padding: 2px 4px; border: 1px solid #d2d2d7
 select.changed { border-color: #3b82f6; background: #eff6ff; }
 input[type=color] { width: 32px; height: 22px; padding: 0; border: 1px solid #d2d2d7; border-radius: 4px; background: none; cursor: pointer; }
 input[type=color].changed { border-color: #3b82f6; }
+.swatches { display: flex; gap: 3px; flex-wrap: nowrap; }
+.swatch { width: 18px; height: 18px; padding: 0; border: 1px solid rgba(0,0,0,.18); border-radius: 4px; }
+.swatch.on { outline: 2px solid #3b82f6; outline-offset: 1px; }
 .lbl { width: 66px; }
 .hint { color: #6e6e73; font-size: 11px; margin: -4px 0 0 72px; }
 .grid { display: grid; grid-template-columns: 62px repeat(4, 1fr); gap: 4px; align-items: center; }

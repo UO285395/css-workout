@@ -3,6 +3,7 @@ import { measure, zoneRect, dragSign, SIDES, type BoxModel, type Rect, type Side
 import { collectSpacingValues, snap } from './snapping';
 import { selectorFor, defaultScope, classSelector, describe, type Scope } from './selector';
 import { UI_CSS } from './styles';
+import { collectVariables, lengthVar, type CssVariable } from './variables';
 import { SCREENS, screenFor, ruleKey, parseKey, type Screen } from './screens';
 import {
   styleLabel, readValue, originalValue, collectFonts, collectFontSizes, axisProp, isFlex, isGrid,
@@ -110,7 +111,8 @@ interface Drag {
   display: { before: Entry | null } | null;
   start: number[];
   pointer: { x: number; y: number };
-  compute: (dx: number, dy: number, e: PointerEvent) => { values: number[]; snapped: boolean };
+  /** `vars`: la variable CSS que vale lo mismo que cada valor, si el imán ha caído en una. */
+  compute: (dx: number, dy: number, e: PointerEvent) => { values: number[]; snapped: boolean; vars?: (string | undefined)[] };
 }
 
 /**
@@ -187,6 +189,7 @@ export class Editor {
   private candidates: number[] = [];
   private fontSizes: number[] = [];
   private fonts: string[] = [];
+  private vars: CssVariable[] = [];
   /** Valor previo de un color mientras se elige en el selector, para apuntarlo como un solo paso. */
   private colorBefore = new Map<string, Entry | null>();
   private drag: Drag | null = null;
@@ -532,7 +535,7 @@ export class Editor {
     this.beginDrag(e, [prop], [start], (dx, dy, ev) => {
       const raw = start + sign * (axis === 'x' ? dx : dy);
       const r = snap(raw, this.candidates, { free: ev.altKey, coarse: ev.shiftKey, min: 0 });
-      return { values: [r.value], snapped: r.snapped };
+      return { values: [r.value], snapped: r.snapped, vars: [this.varFor(r.value, r.snapped && !ev.altKey)] };
     });
   }
 
@@ -578,13 +581,14 @@ export class Editor {
   private onDragMove(e: PointerEvent): void {
     const d = this.drag;
     if (!d) return;
-    const { values, snapped } = d.compute(e.clientX - d.pointer.x, e.clientY - d.pointer.y, e);
+    const { values, snapped, vars } = d.compute(e.clientX - d.pointer.x, e.clientY - d.pointer.y, e);
     if (d.display) this.store.preview(d.selector, 'display', 'inline-block', 'inline');
-    d.props.forEach((p, i) => this.store.preview(d.selector, p, `${values[i]}px`, d.originals[i]));
+    d.props.forEach((p, i) => this.store.preview(d.selector, p, vars?.[i] ? `var(${vars[i]})` : `${values[i]}px`, d.originals[i]));
     const tip = this.ov.tip;
     tip.style.display = '';
+    const named = vars?.find(Boolean);
     tip.innerHTML = d.props.map((p, i) => `${propLabel(p)}: <b>${values[i]}px</b>`).join(' · ') +
-      (snapped ? ' <span class="snap">· ya usado en la página</span>' : '');
+      (named ? ` <span class="snap">· ${escapeHtml(named)}</span>` : snapped ? ' <span class="snap">· ya usado en la página</span>' : '');
     tip.style.left = `${e.clientX + 14}px`;
     tip.style.top = `${e.clientY + 14}px`;
   }
@@ -671,6 +675,10 @@ export class Editor {
     this.candidates = collectSpacingValues(root, ignore);
     this.fontSizes = collectFontSizes(root, ignore);
     this.fonts = collectFonts(root, ignore);
+    this.vars = collectVariables(this.page);
+    // Los valores de las variables de longitud también hacen de imán.
+    const lengths = this.vars.filter((v) => v.kind === 'length' && v.px! > 0).map((v) => v.px!);
+    this.candidates = Array.from(new Set([...this.candidates, ...lengths])).sort((a, b) => a - b);
   }
 
   // ---------- Persistencia (por URL, en este navegador) ----------
@@ -874,8 +882,13 @@ export class Editor {
     // Cada 2 px de ratón cambian 1 px de valor: más preciso que 1:1 en valores pequeños.
     this.beginDrag(e, [prop], [start], (dx, _dy, ev) => {
       const r = snap(start + dx / 2, candidates, { free: ev.altKey, coarse: ev.shiftKey, min });
-      return { values: [r.value], snapped: r.snapped };
+      return { values: [r.value], snapped: r.snapped, vars: [this.varFor(r.value, r.snapped && !ev.altKey && prop !== 'line-height')] };
     });
+  }
+
+  /** Nombre de la variable de longitud que vale `px`, solo si el imán ha caído en ese valor. */
+  private varFor(px: number, snapped: boolean): string | undefined {
+    return snapped ? lengthVar(this.vars, px)?.name : undefined;
   }
 
   private async copy(btn: HTMLButtonElement): Promise<void> {
@@ -995,9 +1008,14 @@ export class Editor {
   private colorField(prop: string, cs: CSSStyleDeclaration): string {
     const changed = this.store.get(this.selector!, prop) ? 'changed' : '';
     const none = !this.store.get(this.selector!, prop) && isTransparent(cs.getPropertyValue(prop));
+    // Con variables de color en la página, se ofrecen como muestras en lugar del código del color.
+    const colors = this.vars.filter((v) => v.kind === 'color').slice(0, 7);
+    const current = this.store.get(this.selector!, prop)?.value;
+    const hex = none ? 'sin color' : readValue(cs, prop);
+    const swatches = colors.map((v) => `<button class="swatch${current === `var(${v.name})` ? ' on' : ''}" data-act="set" data-prop="${prop}" data-value="var(${escapeHtml(v.name)})" title="${escapeHtml(v.name)}: ${escapeHtml(v.value)}" aria-label="${escapeHtml(v.name)}" style="background:${escapeHtml(v.value)}"></button>`).join('');
     return `<span>${styleLabel(prop)}</span>
-      <span class="row"><input type="color" data-prop="${prop}" value="${none ? '#ffffff' : readValue(cs, prop)}" class="${changed}" aria-label="${styleLabel(prop)}">
-      ${none ? '<span class="muted">sin color</span>' : `<code>${readValue(cs, prop)}</code>`}</span>`;
+      <span class="row nowrap"><input type="color" data-prop="${prop}" value="${none ? '#ffffff' : readValue(cs, prop)}" class="${changed}" aria-label="${styleLabel(prop)}" title="${hex}">
+      ${colors.length ? `<span class="swatches">${swatches}</span>` : none ? '<span class="muted">sin color</span>' : `<code>${hex}</code>`}</span>`;
   }
 
   private textSection(el: Element, _selector: string): string {

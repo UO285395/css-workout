@@ -38,6 +38,15 @@ El elemento seleccionado se mantiene al cambiar de tamaño. En la lista de cambi
 
 Como los prototipos no siempre tienen una escala de espaciado fija, al arrastrar el valor se «pega» a los espaciados que ya usa la página (márgenes, rellenos y gaps de todos sus elementos) cuando pasa a menos de 3 px. Así no aparecen valores sueltos como 17 px. El aviso «ya usado en la página» indica cuándo ha ocurrido.
 
+### Variables CSS
+
+Si el prototipo define variables (`--espacio-m: 16px`, `--azul: #2563eb`), el editor las aprovecha:
+
+- Sus longitudes también hacen de imán. Si el arrastre cae justo en el valor de una variable, el CSS usa `var(--espacio-m)` en lugar de los píxeles, y la etiqueta lo indica.
+- Junto a los colores de la pestaña Texto aparecen muestras con las variables de color. Pulsar una aplica `var(--azul)`.
+
+Solo se leen las hojas de estilo del mismo dominio; las de otro dominio no se pueden leer desde la página.
+
 ### Qué CSS se genera
 
 ```css

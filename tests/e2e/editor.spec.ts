@@ -31,7 +31,8 @@ test('arrastrar el relleno de una tarjeta cambia todas las .card y se puede desh
   for (let i = 0; i < 3; i++) expect(await style(cards.nth(i), 'padding-top')).toBe('24px');
 
   await ui(page, 'details summary').click();
-  await expect(ui(page, 'textarea')).toHaveValue(/\.card \{\n  padding-top: 24px; \/\* antes: 16px \*\/\n\}/);
+  // 24 px es lo que vale --espacio-l en la demo: se usa la variable.
+  await expect(ui(page, 'textarea')).toHaveValue(/\.card \{\n  padding-top: var\(--espacio-l\); \/\* antes: 16px \*\/\n\}/);
 
   await page.keyboard.press('Control+z');
   expect(await style(cards.nth(0), 'padding-top')).toBe('16px');
@@ -307,7 +308,7 @@ test('en Móvil se edita la página a 375 px y el cambio va dentro de su @media'
   await dragBy(page, ui(page, '.zone[data-prop="padding-top"]'), 0, 8);
   expect(await style(frame.locator('.card').nth(1), 'padding-top')).toBe('24px');
   expect(await style(cards.nth(1), 'padding-top')).toBe('16px');
-  expect(await page.evaluate(() => window.cssWorkout!.exportCss())).toContain('@media (max-width: 767px) {\n  .card {\n    padding-top: 24px;');
+  expect(await page.evaluate(() => window.cssWorkout!.exportCss())).toContain('@media (max-width: 767px) {\n  .card {\n    padding-top: var(--espacio-l);');
   await expect(ui(page, '.change .badge')).toHaveText('Móvil');
 
   await ui(page, 'button[data-act="screen"][data-value="desktop"]').click();
@@ -382,4 +383,17 @@ test('«Hover» edita cómo se ve al pasar el ratón y lo muestra forzado', asyn
   await ui(page, 'button[data-act="off"]').click();
   await btn.hover();
   expect(await style(btn, 'font-style')).toBe('italic');
+});
+
+test('las variables CSS del prototipo se usan al arrastrar y como muestras de color', async ({ page }) => {
+  const card = page.locator('.card').first();
+  await card.click({ position: { x: 6, y: 6 } });
+  await dragBy(page, ui(page, '.zone[data-prop="padding-top"]'), 0, 8);
+  expect(await page.evaluate(() => window.cssWorkout!.exportCss())).toContain('padding-top: var(--espacio-l);');
+
+  await ui(page, 'button[data-act="mode-text"]').click();
+  await ui(page, 'button.swatch[data-prop="background-color"][data-value="var(--azul)"]').click();
+  expect(await style(card, 'background-color')).toBe('rgb(37, 99, 235)');
+  expect(await page.evaluate(() => window.cssWorkout!.exportCss())).toContain('background-color: var(--azul);');
+  await expect(ui(page, 'button.swatch.on[data-prop="background-color"]')).toHaveAttribute('data-value', 'var(--azul)');
 });

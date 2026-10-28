@@ -1,3 +1,4 @@
+:root { --espacio-s: 8px; --espacio-m: 16px; --espacio-l: 24px; --azul: #2563eb; --azul-oscuro: #1d4ed8; --gris: #555555; }
 * { box-sizing: border-box; }
 body { margin: 0; font-family: system-ui, sans-serif; color: #222; background: #fafafa; }
 .nav { display: flex; justify-content: space-between; align-items: center; padding: 16px 32px; background: #fff; border-bottom: 1px solid #eee; }

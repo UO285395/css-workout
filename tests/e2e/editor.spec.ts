@@ -49,6 +49,8 @@ test('«Solo este» cambia un único elemento', async ({ page }) => {
   const cards = page.locator('.card');
   await cards.nth(2).click({ position: { x: 6, y: 6 } });
   await ui(page, 'button[data-act="scope-element"]').click();
+  // La tercera tarjeta queda bajo el panel: se pasa al otro lado, como haría el usuario.
+  await ui(page, 'button[data-act="side"]').click();
   await dragBy(page, ui(page, '.zone[data-prop="margin-top"]'), 0, -20);
   expect(await style(cards.nth(2), 'margin-top')).toBe('20px');
   expect(await style(cards.nth(0), 'margin-top')).toBe('0px');
@@ -230,4 +232,38 @@ test('alinear un elemento dentro de una fila flex lo mueve con márgenes automá
   const x0 = (await logo.boundingBox())!.x;
   await ui(page, 'button[data-prop="text-align"][data-value="center"]').click();
   expect((await logo.boundingBox())!.x).toBeGreaterThan(x0 + 100);
+});
+
+test('el panel no cambia de tamaño al cambiar de pestaña ni de elemento', async ({ page }) => {
+  const panel = ui(page, '.panel');
+  const height = async () => (await panel.boundingBox())!.height;
+  const h0 = await height();
+  await page.locator('.card').nth(1).click({ position: { x: 6, y: 6 } });
+  for (const mode of ['size', 'text', 'layout', 'spacing']) {
+    await ui(page, `button[data-act="mode-${mode}"]`).click();
+    expect(await height()).toBe(h0);
+  }
+  await page.locator('.btn').click();
+  await ui(page, 'button[data-act="mode-text"]').click();
+  expect(await height()).toBe(h0);
+  // Sin desplazamiento horizontal ni barra en el panel entero: solo se desplaza la zona de la pestaña.
+  expect(await panel.evaluate((el) => el.scrollWidth <= el.clientWidth && el.scrollHeight <= el.clientHeight)).toBe(true);
+  await expect(ui(page, '.tab')).toHaveCount(1);
+});
+
+test('la pestaña Texto cabe sin desplazarse en una pantalla de 800 px de alto', async ({ page }) => {
+  await page.locator('.card h2').first().click();
+  await ui(page, 'button[data-act="mode-text"]').click();
+  expect(await ui(page, '.tab').evaluate((el) => el.scrollHeight - el.clientHeight)).toBeLessThanOrEqual(0);
+});
+
+test('alinear el texto de una tarjeta no la mueve: su título deja hueco', async ({ page }) => {
+  const card = page.locator('.card').first();
+  const before = (await card.boundingBox())!;
+  await card.click({ position: { x: 6, y: 6 } });
+  await ui(page, 'button[data-act="mode-text"]').click();
+  await expect(ui(page, '[data-hint="text-align"]')).toHaveCount(0);
+  await ui(page, 'button[data-prop="text-align"][data-value="center"]').click();
+  expect(await style(card, 'text-align')).toBe('center');
+  expect(await card.boundingBox()).toEqual(before);
 });

@@ -18,6 +18,7 @@ const BLOCK_ONLY = ['width', 'height', 'margin-top', 'margin-bottom'];
 export const needsInlineBlock = (display: string, props: readonly string[]) =>
   display === 'inline' && props.some((p) => BLOCK_ONLY.includes(p));
 const STORAGE_PREFIX = 'css-workout:';
+const HELP = 'Arrastra una etiqueta subrayada para cambiar su valor\nArrastra con Alt: sin imán\nArrastra con Shift: de 8 en 8\nEsc: soltar la selección\nCtrl+Z / Ctrl+Shift+Z: deshacer y rehacer';
 
 const SIDE_LABEL: Record<Side, string> = { top: 'superior', right: 'derecho', bottom: 'inferior', left: 'izquierdo' };
 const KIND_LABEL: Record<Kind, string> = { margin: 'Margen', padding: 'Relleno' };
@@ -104,10 +105,20 @@ function textFitsBox(el: Element, cs: CSSStyleDeclaration): boolean {
   const px = (v: string) => parseFloat(v) || 0;
   const content = el.getBoundingClientRect().width - px(cs.paddingLeft) - px(cs.paddingRight)
     - px(cs.borderLeftWidth) - px(cs.borderRightWidth);
+  // Se mide cada línea de texto: si alguna deja hueco (un título corto dentro de una tarjeta,
+  // la última línea de un párrafo), alinear sí se nota.
+  const lines = new Map<number, number>();
   const range = el.ownerDocument.createRange();
-  range.selectNodeContents(el);
-  const text = range.getBoundingClientRect().width;
-  return text > 0 && content - text < 1;
+  const walker = el.ownerDocument.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    if (!n.textContent!.trim()) continue;
+    range.selectNodeContents(n);
+    for (const r of Array.from(range.getClientRects())) {
+      const top = Math.round(r.top);
+      lines.set(top, (lines.get(top) ?? 0) + r.width);
+    }
+  }
+  return lines.size > 0 && Array.from(lines.values()).every((w) => content - w < 1);
 }
 
 export class Editor {
@@ -132,6 +143,8 @@ export class Editor {
   private drag: Drag | null = null;
   private frame = 0;
   private cssOpen = false;
+  /** Pestaña y selector dibujados por última vez, para conservar el desplazamiento. */
+  private tabView = '';
   private storageKey: string;
 
   private ov!: {
@@ -468,7 +481,7 @@ export class Editor {
   private buildPanel(): void {
     this.panel.innerHTML = `
       <div class="head">
-        <span class="title">CSS Workout</span>
+        <span class="title" title="${HELP}">CSS Workout</span>
         <div class="toggle" title="Mientras editas, los clics seleccionan elementos en vez de usar el prototipo">
           <button data-act="on">Editar</button><button data-act="off">Usar página</button>
         </div>
@@ -476,9 +489,8 @@ export class Editor {
         <button class="icon" data-act="min" title="Minimizar">—</button>
       </div>
       <div class="body">
-        <div data-part="selection"></div>
-        <div data-part="changes"></div>
-        <div class="muted">Alt: sin imán · Shift: de 8 en 8 · Esc: soltar selección · Ctrl+Z: deshacer</div>
+        <div class="selection" data-part="selection"></div>
+        <div class="foot" data-part="changes"></div>
       </div>`;
     this.panel.addEventListener('click', (e) => this.onPanelClick(e));
     this.panel.addEventListener('change', (e) => this.onPanelChange(e));
@@ -673,7 +685,8 @@ export class Editor {
     const el = this.selected;
     const focused = this.root.activeElement;
     if (!el) {
-      part.innerHTML = `<div class="empty">${this.active ? 'Haz clic en un elemento de la página para ajustarlo.' : 'Pulsa «Editar» para seleccionar elementos.'}</div>`;
+      part.innerHTML = `<div class="tab"><div class="empty">${this.active ? 'Haz clic en un elemento de la página para ajustarlo.' : 'Pulsa «Editar» para seleccionar elementos.'}</div>
+        <ul class="muted help">${HELP.split('\n').map((l) => `<li>${l}</li>`).join('')}</ul></div>`;
       return;
     }
     // No se reconstruye mientras el usuario escribe en un campo o arrastra, para no perder el foco.
@@ -691,7 +704,12 @@ export class Editor {
     const input = (prop: string, value: number) =>
       `<input type="number" min="0" data-prop="${prop}" value="${value}" class="${this.store.get(selector, prop) ? 'changed' : ''}" aria-label="${propLabel(prop)}">`;
 
+    // Al redibujar la misma pestaña se conserva el desplazamiento, para no saltar arriba tras cada clic.
+    const view = `${this.mode}|${selector}`;
+    const scroll = view === this.tabView ? part.querySelector('.tab')?.scrollTop ?? 0 : 0;
+    this.tabView = view;
     part.innerHTML = `
+      <div class="sel-head">
       <div class="row"><b class="mono">${escapeHtml(describe(el))}</b>
         <span style="flex:1"></span>
         <button data-act="parent" title="Seleccionar el contenedor">↑ Padre</button>
@@ -708,8 +726,12 @@ export class Editor {
         <button data-act="mode-text" class="${this.mode === 'text' ? 'on' : ''}">Texto</button>
         <button data-act="mode-layout" class="${this.mode === 'layout' ? 'on' : ''}">Alineación</button>
       </div>
+      </div>
+      <div class="tab">
       ${this.mode === 'text' ? this.textSection(el, selector) : this.mode === 'layout' ? this.layoutSection(el, selector) : this.boxSection(el, selector, box, inline, input)}
-      <div class="muted mono" title="Selector al que se aplicarán los cambios">${escapeHtml(selector)}</div>`;
+      <div class="muted mono" title="Selector al que se aplicarán los cambios">${escapeHtml(selector)}</div>
+      </div>`;
+    part.querySelector('.tab')!.scrollTop = scroll;
   }
 
   private boxSection(_el: Element, _selector: string, box: BoxModel, inline: boolean, input: (prop: string, value: number) => string): string {
@@ -760,7 +782,6 @@ export class Editor {
     const weightChanged = this.store.get(this.selector!, 'font-weight') ? 'changed' : '';
     const lineHint = String(Math.round(parseFloat(cs.fontSize) * 1.2));
     return `
-      <div class="muted">Arrastra sobre el nombre de un valor para ajustarlo</div>
       <div class="form">
         ${this.numberField('font-size', readValue(cs, 'font-size'))}
         <span>Grosor</span>
@@ -775,17 +796,17 @@ export class Editor {
         ${this.colorField('color', cs)}
         ${this.colorField('background-color', cs)}
       </div>
-      <div class="row"><span class="muted">Alinear texto</span>
+      <div class="field"><span>Alinear texto</span>
         ${this.choice('text-align', readValue(cs, 'text-align'), [['left', 'Izquierda'], ['center', 'Centro'], ['right', 'Derecha'], ['justify', 'Justificado']])}
       </div>
       ${textFitsBox(el, cs) ? (inTextLine(el)
         ? `<div class="warn" data-hint="text-align">Este elemento forma parte de una línea de texto. Para alinearlo, pulsa «↑ Padre» y alinea el párrafo entero.</div>`
-        : `<div class="hint-box" data-hint="text-align">Este elemento mide lo mismo que su texto: al alinear se moverá el elemento entero dentro de su contenedor.</div>`) : ''}
+        : `<div class="hint-box" data-hint="text-align">Mide lo mismo que su texto: al alinear se moverá el elemento entero dentro de su contenedor.</div>`) : ''}
       <div class="row">
         ${this.choice('font-style', cs.fontStyle === 'italic' ? 'italic' : 'normal', [['normal', 'Normal'], ['italic', '<i>Cursiva</i>']])}
         ${this.choice('text-decoration-line', cs.textDecorationLine.includes('underline') ? 'underline' : 'none', [['none', 'Sin subrayar'], ['underline', '<u>Subrayado</u>']])}
       </div>
-      <div class="row"><span class="muted">Mayúsculas</span>
+      <div class="field"><span>Mayúsculas</span>
         ${this.choice('text-transform', cs.textTransform, [['none', 'Como está'], ['uppercase', 'TODO'], ['capitalize', 'Cada Palabra']])}
       </div>`;
   }
@@ -861,16 +882,20 @@ export class Editor {
             </span>
             <button class="icon" data-act="remove" data-selector="${escapeHtml(r.selector)}" data-prop="${r.prop}" title="Quitar este cambio">✕</button>
           </div>`).join('')}</div>`;
+    // Pie de altura fija: la lista y el CSS se despliegan dentro del panel sin cambiar su tamaño.
+    const listScroll = part.scrollTop;
     part.innerHTML = `
-      <div class="row"><b>Cambios (${rows.length})</b><span style="flex:1"></span>
-        <button data-act="undo" ${this.store.canUndo() ? '' : 'disabled'}>Deshacer</button>
-        <button data-act="redo" ${this.store.canRedo() ? '' : 'disabled'}>Rehacer</button>
-      </div>
-      ${list}
-      ${rows.length ? `<details ${this.cssOpen ? 'open' : ''}><summary class="muted">Ver CSS</summary><textarea readonly>${escapeHtml(this.exportCss())}</textarea></details>` : ''}
-      <div class="row">
+      <div class="row nowrap"><b>Cambios (${rows.length})</b><span style="flex:1"></span>
+        <button class="icon" data-act="undo" title="Deshacer (Ctrl+Z)" aria-label="Deshacer" ${this.store.canUndo() ? '' : 'disabled'}>↶</button>
+        <button class="icon" data-act="redo" title="Rehacer (Ctrl+Shift+Z)" aria-label="Rehacer" ${this.store.canRedo() ? '' : 'disabled'}>↷</button>
         <button class="primary" data-act="copy" ${rows.length ? '' : 'disabled'}>Copiar CSS</button>
-        <button data-act="clear" ${rows.length ? '' : 'disabled'}>Descartar todo</button>
-      </div>`;
+      </div>
+      ${rows.length ? `<details ${this.cssOpen ? 'open' : ''}><summary class="muted">Ver cambios y CSS</summary>
+        <div class="foot-more">
+          ${list}
+          <textarea readonly wrap="off" aria-label="CSS de los cambios">${escapeHtml(this.exportCss())}</textarea>
+          <div class="row"><button data-act="clear">Descartar todo</button></div>
+        </div></details>` : ''}`;
+    part.scrollTop = listScroll;
   }
 }

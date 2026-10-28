@@ -82,6 +82,8 @@ button.link { border: 0; background: none; padding: 0; color: #3b82f6; text-deco
 button.link:hover:not(:disabled) { background: none; }
 .row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .row.nowrap { flex-wrap: nowrap; }
+.sel-head > * { min-width: 0; }
+.el-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .muted { color: #6e6e73; }
 .warn { color: #b45309; background: #fef3c7; border-radius: 6px; padding: 6px 8px; }
 .hint-box { color: #1e40af; background: #eff6ff; border-radius: 6px; padding: 6px 8px; }
@@ -94,6 +96,7 @@ button:disabled { opacity: .45; cursor: default; }
 button.primary { background: #3b82f6; border-color: #3b82f6; color: #fff; }
 button.primary:hover:not(:disabled) { background: #2f6fd8; }
 button.icon { padding: 2px 6px; }
+button.on-state { background: #fef3c7; border-color: #f59e0b; color: #92400e; }
 .toggle { display: inline-flex; border: 1px solid #d2d2d7; border-radius: 6px; overflow: hidden; }
 .toggle button { border: 0; border-radius: 0; }
 .toggle button.on { background: #3b82f6; color: #fff; }

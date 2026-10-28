@@ -359,3 +359,27 @@ test('si el contenedor no está en fila o columna, explica cómo reordenar', asy
   await ui(page, 'button[data-act="mode-layout"]').click();
   await expect(ui(page, '.panel')).toContainText('Para cambiar el orden');
 });
+
+test('«Hover» edita cómo se ve al pasar el ratón y lo muestra forzado', async ({ page }) => {
+  const btn = page.locator('.btn');
+  await btn.click();
+  await ui(page, 'button[data-act="hover"]').click();
+  // Se ve como al pasar el ratón: con la regla :hover del prototipo.
+  expect(await style(btn, 'background-color')).toBe('rgb(29, 78, 216)');
+  await expect(ui(page, '.panel')).toContainText('.btn:hover');
+
+  await ui(page, 'button[data-act="mode-text"]').click();
+  await ui(page, 'button[data-prop="font-style"][data-value="italic"]').click();
+  expect(await style(btn, 'font-style')).toBe('italic');
+  expect(await page.evaluate(() => window.cssWorkout!.exportCss())).toContain('.btn:hover {\n  font-style: italic;');
+
+  // Fuera del estado hover, el botón vuelve a su aspecto normal y no lleva clases del editor.
+  await ui(page, 'button[data-act="hover"]').click();
+  expect(await style(btn, 'font-style')).toBe('normal');
+  expect(await style(btn, 'background-color')).toBe('rgb(37, 99, 235)');
+  expect(await btn.getAttribute('class')).toBe('btn');
+  // Con el ratón encima de verdad, se aplica el cambio.
+  await ui(page, 'button[data-act="off"]').click();
+  await btn.hover();
+  expect(await style(btn, 'font-style')).toBe('italic');
+});

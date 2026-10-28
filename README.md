@@ -15,6 +15,7 @@ Pensado para gente que entiende qué es un margen o un relleno pero no escribe C
    - **Alineación:** coloca los elementos de dentro uno debajo de otro, en fila o en columna; repártelos y alinéalos en horizontal y vertical, y ajusta la separación entre ellos. Si el contenedor del elemento lo coloca en fila, columna o cuadrícula, también puedes cambiar su **orden** (primero, antes, después, último) sin tocar el HTML.
 
    Los valores numéricos se pueden escribir o ajustar arrastrando a izquierda o derecha sobre su nombre.
+   **Hover**, junto a «↑ Padre», edita cómo se ve el elemento al pasar el ratón por encima: lo muestra en ese estado mientras ajustas y el CSS sale como `:hover`.
 4. Elige si el cambio se aplica a **todos los elementos con esa clase** o **solo a ese**.
 5. Pulsa **Copiar CSS** y pégalo al final de la hoja de estilos del prototipo.
 

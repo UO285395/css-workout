@@ -153,7 +153,7 @@ export class ChangeStore {
    * CSS de los cambios. Con `important` se usa para la vista previa (gana a las reglas del
    * prototipo); sin él es el CSS que el usuario copia.
    */
-  toCss({ important = false, comments = false } = {}): string {
+  toCss({ important = false, comments = false, mapSelector = (sel: string) => sel } = {}): string {
     // Primero las reglas para todos los tamaños y luego cada @media, del más ancho al más estrecho,
     // para que el tamaño más pequeño gane.
     const groups = new Map<Screen, string[]>();
@@ -165,7 +165,7 @@ export class ChangeStore {
         return comments && e.original ? `${decl} /* antes: ${e.original} */` : decl;
       });
       if (!groups.has(screen)) groups.set(screen, []);
-      groups.get(screen)!.push(`${selector} {\n${lines.map((l) => `  ${l}`).join('\n')}\n}`);
+      groups.get(screen)!.push(`${mapSelector(selector)} {\n${lines.map((l) => `  ${l}`).join('\n')}\n}`);
     }
     return SCREENS.filter((sc) => groups.has(sc)).map((sc) => {
       const blocks = groups.get(sc)!.join('\n\n');

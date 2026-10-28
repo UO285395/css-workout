@@ -74,6 +74,31 @@ const orderedSiblings = (parent: Element): Element[] => Array.from(parent.childr
   .filter(({ cs }) => cs.display !== 'none' && cs.position !== 'absolute' && cs.position !== 'fixed')
   .sort((a, b) => (Number(a.cs.order) || 0) - (Number(b.cs.order) || 0) || a.i - b.i)
   .map(({ el }) => el);
+const HOVER_CLASS = 'cssw-hover';
+const withForcedHover = (sel: string) => (sel.includes(':hover') ? `${sel}, ${sel.replace(/:hover/g, `.${HOVER_CLASS}`)}` : sel);
+
+/** Copia de las reglas :hover de la página para la clase que fuerza ese estado. */
+function hoverRulesCopy(doc: Document): string {
+  const out: string[] = [];
+  const walk = (rules: CSSRuleList) => {
+    for (const r of Array.from(rules)) {
+      const style = r as CSSStyleRule;
+      const group = r as CSSGroupingRule & { conditionText?: string };
+      if (style.selectorText?.includes(':hover')) {
+        out.push(`${style.selectorText.replace(/:hover/g, `.${HOVER_CLASS}`)} { ${style.style.cssText} }`);
+      } else if (group.cssRules && group.conditionText != null && r.cssText.startsWith('@media')) {
+        const start = out.length;
+        walk(group.cssRules);
+        if (out.length > start) out.splice(start, out.length - start, `@media ${group.conditionText} { ${out.slice(start).join(' ')} }`);
+      }
+    }
+  };
+  for (const sheet of Array.from(doc.styleSheets)) {
+    if ((sheet.ownerNode as Element | null)?.id?.startsWith('css-workout')) continue;
+    try { walk(sheet.cssRules); } catch { /* hoja de otro dominio: no se puede leer */ }
+  }
+  return out.join('\n');
+}
 const escapeHtml = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
 
 interface Drag {
@@ -181,6 +206,9 @@ export class Editor {
   private ovRoot!: HTMLElement;
   /** Una hoja de vista previa por documento (la página y, si está abierto, el marco). */
   private previews = new Set<HTMLStyleElement>();
+  /** Editando cómo se ve al pasar el ratón: los elementos afectados se fuerzan a ese estado. */
+  private hoverState = false;
+  private forced = new Set<Element>();
   private comparePill!: HTMLButtonElement;
   /** Pestaña y selector dibujados por última vez, para conservar el desplazamiento. */
   private tabView = '';
@@ -252,6 +280,8 @@ export class Editor {
   }
 
   private detachPage(page: Document): void {
+    for (const el of this.forced) if (el.ownerDocument === page) { el.classList.remove(HOVER_CLASS); this.forced.delete(el); }
+    page.getElementById('css-workout-hover')?.remove();
     page.removeEventListener('mousemove', this.onMouseMove, true);
     page.removeEventListener('click', this.onClick, true);
     if (page !== this.doc) page.removeEventListener('keydown', this.onKeyDown, true);
@@ -259,11 +289,31 @@ export class Editor {
   }
 
   private updatePreviews(): void {
-    const css = this.store.toCss({ important: true });
+    // Las reglas :hover también se aplican a los elementos forzados con la clase cssw-hover.
+    const css = this.store.toCss({ important: true, mapSelector: withForcedHover });
     for (const st of this.previews) {
       st.textContent = css;
       st.media = this.comparing ? 'not all' : '';
     }
+  }
+
+  /**
+   * Fuerza el estado «al pasar el ratón» en los elementos afectados: les pone la clase cssw-hover
+   * y copia las reglas :hover del prototipo para esa clase (un script no puede activar :hover).
+   */
+  private syncForcedHover(): void {
+    const want = new Set(this.hoverState && this.selected && !this.comparing ? [this.selected, ...this.matches()] : []);
+    for (const el of this.forced) if (!want.has(el)) el.classList.remove(HOVER_CLASS);
+    for (const el of want) if (!this.forced.has(el)) el.classList.add(HOVER_CLASS);
+    this.forced = want;
+    let copy = this.page.getElementById('css-workout-hover');
+    if (want.size && !copy) {
+      copy = this.page.createElement('style');
+      copy.id = 'css-workout-hover';
+      copy.textContent = hoverRulesCopy(this.page);
+      // Antes de la vista previa, para que los cambios del usuario ganen.
+      this.page.head.insertBefore(copy, Array.from(this.previews).find((st) => st.ownerDocument === this.page) ?? null);
+    } else if (!want.size && copy) copy.remove();
   }
 
   /**
@@ -328,6 +378,7 @@ export class Editor {
   }
 
   select(el: Element | null): void {
+    if (el !== this.selected) this.hoverState = false;
     this.selected = el;
     if (el) this.scope = defaultScope(el);
     this.collectAll();
@@ -336,7 +387,12 @@ export class Editor {
 
   /** Clave de la regla donde se guardan los cambios: el selector y, fuera de escritorio, su @media. */
   get selector(): string | null {
-    return this.selected ? ruleKey(selectorFor(this.selected, this.scope), this.screen) : null;
+    return this.selected ? ruleKey(this.ruleSelector!, this.screen) : null;
+  }
+
+  /** Selector de la regla tal como saldrá en el CSS, con `:hover` si se edita ese estado. */
+  get ruleSelector(): string | null {
+    return this.cssSelector && (this.hoverState ? `${this.cssSelector}:hover` : this.cssSelector);
   }
 
   get cssSelector(): string | null {
@@ -388,6 +444,7 @@ export class Editor {
   private renderOverlay(): void {
     const ov = this.ov;
     this.placeOverlayRoot();
+    this.syncForcedHover();
     const showHover = this.active && this.hovered && this.hovered !== this.selected && !this.drag;
     if (showHover) {
       const r = this.hovered!.getBoundingClientRect();
@@ -692,6 +749,7 @@ export class Editor {
         break;
       case 'children': this.setChildren(btn.dataset.value!); break;
       case 'order': this.reorder(btn.dataset.value!); break;
+      case 'hover': this.hoverState = !this.hoverState; this.tabView = ''; break;
       case 'scope-class': this.scope = 'class'; break;
       case 'scope-element': this.scope = 'element'; break;
       case 'undo': this.store.undo(); break;
@@ -878,8 +936,9 @@ export class Editor {
     this.tabView = view;
     part.innerHTML = `
       <div class="sel-head">
-      <div class="row"><b class="mono">${escapeHtml(describe(el))}</b>
+      <div class="row nowrap"><b class="mono el-name" title="${escapeHtml(describe(el))}">${escapeHtml(describe(el))}</b>
         <span style="flex:1"></span>
+        <button data-act="hover" class="${this.hoverState ? 'on-state' : ''}" aria-pressed="${this.hoverState}" title="Editar cómo se ve al pasar el ratón por encima (:hover)">Hover</button>
         <button data-act="parent" title="Seleccionar el contenedor">↑ Padre</button>
         <button data-act="deselect" title="Soltar selección (Esc)">✕</button>
       </div>
@@ -897,7 +956,7 @@ export class Editor {
       </div>
       <div class="tab">
       ${this.mode === 'text' ? this.textSection(el, selector) : this.mode === 'layout' ? this.layoutSection(el, selector) : this.boxSection(el, selector, box, inline, input)}
-      <div class="muted mono" title="Selector al que se aplicarán los cambios">${escapeHtml(this.cssSelector!)}${this.screen.media ? ` · solo ${this.screen.label.toLowerCase()} y menores` : ''}</div>
+      <div class="muted mono" title="Selector al que se aplicarán los cambios">${escapeHtml(this.ruleSelector!)}${this.screen.media ? ` · solo ${this.screen.label.toLowerCase()} y menores` : ''}</div>
       </div>`;
     part.querySelector('.tab')!.scrollTop = scroll;
   }

@@ -292,3 +292,38 @@ test('«Antes» muestra la página original sin perder los cambios', async ({ pa
   expect(await style(h1, 'font-style')).toBe('italic');
   await expect(ui(page, '.compare-pill')).toBeHidden();
 });
+
+test('en Móvil se edita la página a 375 px y el cambio va dentro de su @media', async ({ page }) => {
+  const cards = page.locator('.card');
+  await cards.nth(1).click({ position: { x: 6, y: 6 } });
+  await ui(page, 'button[data-act="screen"][data-value="mobile"]').click();
+
+  const frame = page.frameLocator('css-workout iframe.frame');
+  await expect(frame.locator('.card').first()).toBeVisible();
+  // La selección pasa al mismo elemento dentro del marco.
+  await expect(ui(page, '.panel')).toContainText('article.card');
+  expect(await ui(page, 'iframe.frame').evaluate((f) => (f as HTMLIFrameElement).contentWindow!.innerWidth)).toBe(375);
+
+  await dragBy(page, ui(page, '.zone[data-prop="padding-top"]'), 0, 8);
+  expect(await style(frame.locator('.card').nth(1), 'padding-top')).toBe('24px');
+  expect(await style(cards.nth(1), 'padding-top')).toBe('16px');
+  expect(await page.evaluate(() => window.cssWorkout!.exportCss())).toContain('@media (max-width: 767px) {\n  .card {\n    padding-top: 24px;');
+  await expect(ui(page, '.change .badge')).toHaveText('Móvil');
+
+  await ui(page, 'button[data-act="screen"][data-value="desktop"]').click();
+  await expect(ui(page, 'iframe.frame')).toHaveCount(0);
+  await expect(ui(page, '.panel')).toContainText('article.card');
+  // En escritorio el cambio de móvil no se aplica.
+  expect(await style(cards.nth(1), 'padding-top')).toBe('16px');
+});
+
+test('en Tableta un clic dentro del marco selecciona y el cambio va a su @media', async ({ page }) => {
+  await ui(page, 'button[data-act="screen"][data-value="tablet"]').click();
+  const frame = page.frameLocator('css-workout iframe.frame');
+  await frame.locator('.hero h1').click();
+  await expect(ui(page, '.panel')).toContainText('h1');
+  await ui(page, 'button[data-act="mode-text"]').click();
+  await ui(page, 'button[data-prop="font-style"][data-value="italic"]').click();
+  expect(await style(frame.locator('.hero h1'), 'font-style')).toBe('italic');
+  expect(await page.evaluate(() => window.cssWorkout!.exportCss())).toContain('@media (max-width: 1023px)');
+});

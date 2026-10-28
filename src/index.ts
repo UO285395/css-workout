@@ -9,6 +9,8 @@ declare global {
  * el bookmarklet) lo cierra.
  */
 function toggle(): Editor | undefined {
+  // Dentro del marco de móvil o tableta ya edita el editor de la página de fuera.
+  if (window.name === 'css-workout-frame') return undefined;
   if (window.cssWorkout) {
     window.cssWorkout.destroy();
     window.cssWorkout = undefined;

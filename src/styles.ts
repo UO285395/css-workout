@@ -34,13 +34,13 @@ export const UI_CSS = `
 .tip .snap { color: #9be38a; }
 
 /* Tamaño fijo: cambiar de pestaña o de elemento no lo redimensiona. Solo se desplaza la zona de la pestaña. */
-.panel { position: fixed; z-index: 1; right: 16px; bottom: 16px; width: 320px; height: min(640px, calc(100vh - 32px));
+.panel { position: fixed; z-index: 1; right: 16px; bottom: 16px; width: 320px; height: min(680px, calc(100vh - 32px));
   display: flex; flex-direction: column; overflow: hidden;
   pointer-events: auto; background: #fff; border: 1px solid #d2d2d7; border-radius: 10px;
   box-shadow: 0 8px 28px rgba(0,0,0,.18); }
 .panel.left { right: auto; left: 16px; }
 /* Antes y después: solo queda a la vista el botón para volver. */
-.layer.comparing > :not(.compare-pill) { display: none !important; }
+.layer.comparing > :not(.compare-pill):not(.stage) { display: none !important; }
 .compare-pill { display: none; position: fixed; right: 16px; bottom: 16px; z-index: 1; pointer-events: auto; padding: 8px 14px;
   border-radius: 999px; background: #fff; border: 1px solid #d2d2d7; box-shadow: 0 6px 20px rgba(0,0,0,.18); }
 .compare-pill b { color: #3b82f6; }
@@ -49,6 +49,19 @@ export const UI_CSS = `
 .panel.min .body { display: none; }
 .head { flex: none; display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-bottom: 1px solid #ececf0; }
 .head .title { font-weight: 600; flex: 1; white-space: nowrap; cursor: help; }
+.head { flex-wrap: wrap; }
+.head .screens { flex: 1 0 100%; display: flex; }
+.head .screens button { flex: 1; }
+.head .screens .px { opacity: .7; font-size: 10px; }
+
+/* Marco para móvil y tableta: la página a ese ancho, centrada en el hueco que deja el panel. */
+.stage { display: none; position: fixed; inset: 0; background: #e8e8ed; pointer-events: auto;
+  justify-content: safe center; align-items: flex-start; overflow: auto; padding: 36px 352px 16px 16px; }
+.layer.panel-left .stage { padding: 36px 16px 16px 352px; }
+.layer.framed .stage { display: flex; }
+.stage::before { content: attr(data-label); position: absolute; top: 10px; left: 0; right: 0; text-align: center; color: #6e6e73; font-size: 12px; }
+.frame { flex: none; height: 100%; border: 0; background: #fff; box-shadow: 0 2px 12px rgba(0,0,0,.15); }
+.badge { display: inline-block; font-size: 10px; padding: 0 5px; border-radius: 4px; background: #fef3c7; color: #b45309; }
 .body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .selection { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .sel-head { flex: none; display: grid; gap: 8px; padding: 10px 10px 8px; border-bottom: 1px solid #ececf0; }

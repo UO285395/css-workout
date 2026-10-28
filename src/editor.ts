@@ -3,6 +3,7 @@ import { measure, zoneRect, dragSign, SIDES, type BoxModel, type Rect, type Side
 import { collectSpacingValues, snap } from './snapping';
 import { selectorFor, defaultScope, classSelector, describe, type Scope } from './selector';
 import { UI_CSS } from './styles';
+import { SCREENS, screenFor, ruleKey, parseKey, type Screen } from './screens';
 import {
   styleLabel, readValue, originalValue, collectFonts, collectFontSizes, axisProp, isFlex, isGrid,
   isTransparent, NUMERIC, WEIGHTS,
@@ -49,6 +50,24 @@ const place = (el: HTMLElement, r: Rect | null) => {
   el.style.height = `${Math.max(0, r.h)}px`;
 };
 
+/** Etiqueta del tamaño en la lista de cambios; escritorio no la lleva. */
+const screenTag = (key: string) => {
+  const { screen } = parseKey(key);
+  return screen.media ? `<span class="badge">${screen.label}</span> ` : '';
+};
+const FRAME_NAME = 'css-workout-frame';
+
+/** Posición de un elemento como índices de hijos desde <html>, para encontrarlo en la copia del marco. */
+const pathOf = (el: Element): number[] => {
+  const path: number[] = [];
+  for (let e: Element | null = el; e?.parentElement; e = e.parentElement) path.unshift(Array.from(e.parentElement.children).indexOf(e));
+  return path;
+};
+const resolvePath = (doc: Document, path: number[]): Element | null => {
+  let e: Element | null = doc.documentElement;
+  for (const i of path) e = e?.children[i] ?? null;
+  return e && e !== doc.documentElement ? e : null;
+};
 const escapeHtml = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
 
 interface Drag {
@@ -126,7 +145,6 @@ export class Editor {
 
   private host: HTMLElement;
   private root: ShadowRoot;
-  private previewStyle: HTMLStyleElement;
   private layer: HTMLElement;
   private panel: HTMLElement;
 
@@ -145,6 +163,18 @@ export class Editor {
   private cssOpen = false;
   /** Mostrando la página original: los cambios siguen guardados, solo se apaga la vista previa. */
   private comparing = false;
+  /** Tamaño de pantalla según el ancho de la ventana: decide en qué @media van los cambios. */
+  private screen: Screen;
+  /** Documento que se edita: la propia página o, en móvil y tableta, la copia dentro del marco. */
+  private page: Document;
+  /** Marco con la página a otro ancho (móvil o tableta); null cuando se edita la ventana real. */
+  private frameScreen: Screen | null = null;
+  private stage!: HTMLElement;
+  private iframe: HTMLIFrameElement | null = null;
+  /** Capa de contornos y tiradores; en el marco se desplaza para coincidir con él. */
+  private ovRoot!: HTMLElement;
+  /** Una hoja de vista previa por documento (la página y, si está abierto, el marco). */
+  private previews = new Set<HTMLStyleElement>();
   private comparePill!: HTMLButtonElement;
   /** Pestaña y selector dibujados por última vez, para conservar el desplazamiento. */
   private tabView = '';
@@ -159,13 +189,17 @@ export class Editor {
   };
 
   constructor(private doc: Document = document) {
+    this.page = doc;
     this.storageKey = STORAGE_PREFIX + doc.location.pathname;
+    this.screen = screenFor(this.viewportWidth());
 
     this.host = doc.createElement('css-workout');
     this.host.setAttribute('style', 'all:initial;position:fixed;inset:0;z-index:2147483647;pointer-events:none;');
     this.root = this.host.attachShadow({ mode: 'open' });
     h('style', '', this.root).textContent = UI_CSS;
     this.layer = h('div', 'layer', this.root);
+    this.stage = h('div', 'stage', this.layer);
+    this.ovRoot = h('div', 'ov-root', this.layer);
     this.buildOverlay();
     this.panel = h('div', 'panel', this.layer);
     this.buildPanel();
@@ -175,22 +209,16 @@ export class Editor {
     this.comparePill.addEventListener('click', () => this.setComparing(false));
     doc.documentElement.appendChild(this.host);
 
-    this.previewStyle = doc.createElement('style');
-    this.previewStyle.id = 'css-workout-preview';
-    doc.head.appendChild(this.previewStyle);
-
     this.restore();
     this.store.onChange(() => {
       if (this.store.size === 0 && this.comparing) this.setComparing(false);
-      this.previewStyle.textContent = this.store.toCss({ important: true });
+      this.updatePreviews();
       this.persist();
       this.renderPanel();
     });
-    this.previewStyle.textContent = this.store.toCss({ important: true });
-
-    doc.addEventListener('mousemove', this.onMouseMove, true);
-    doc.addEventListener('click', this.onClick, true);
+    this.attachPage(doc);
     doc.addEventListener('keydown', this.onKeyDown, true);
+    doc.defaultView?.addEventListener('resize', this.onResize);
     this.collectAll();
     this.renderPanel();
     this.loop();
@@ -198,11 +226,92 @@ export class Editor {
 
   destroy(): void {
     cancelAnimationFrame(this.frame);
-    this.doc.removeEventListener('mousemove', this.onMouseMove, true);
-    this.doc.removeEventListener('click', this.onClick, true);
+    this.detachPage(this.page);
+    if (this.page !== this.doc) this.detachPage(this.doc);
     this.doc.removeEventListener('keydown', this.onKeyDown, true);
+    this.doc.defaultView?.removeEventListener('resize', this.onResize);
     this.host.remove();
-    this.previewStyle.remove();
+  }
+
+  /** Empieza a escuchar y previsualizar en un documento (la página o la del marco). */
+  private attachPage(page: Document): void {
+    const style = page.createElement('style');
+    style.id = 'css-workout-preview';
+    page.head.appendChild(style);
+    this.previews.add(style);
+    this.updatePreviews();
+    page.addEventListener('mousemove', this.onMouseMove, true);
+    page.addEventListener('click', this.onClick, true);
+    if (page !== this.doc) page.addEventListener('keydown', this.onKeyDown, true);
+  }
+
+  private detachPage(page: Document): void {
+    page.removeEventListener('mousemove', this.onMouseMove, true);
+    page.removeEventListener('click', this.onClick, true);
+    if (page !== this.doc) page.removeEventListener('keydown', this.onKeyDown, true);
+    for (const st of this.previews) if (st.ownerDocument === page) { st.remove(); this.previews.delete(st); }
+  }
+
+  private updatePreviews(): void {
+    const css = this.store.toCss({ important: true });
+    for (const st of this.previews) {
+      st.textContent = css;
+      st.media = this.comparing ? 'not all' : '';
+    }
+  }
+
+  /**
+   * Móvil o tableta: muestra la página a ese ancho en un marco y edita dentro de él, para que sus
+   * @media se apliquen de verdad. Escritorio vuelve a la ventana real.
+   */
+  private setFrameScreen(screen: Screen | null): void {
+    if (screen === this.frameScreen) return;
+    const path = this.selected ? pathOf(this.selected) : null;
+    this.frameScreen = screen;
+    this.hovered = null;
+    this.selected = null;
+    if (this.page !== this.doc) this.detachPage(this.page);
+    this.page = this.doc;
+    this.iframe?.remove();
+    this.iframe = null;
+    this.layer.classList.toggle('framed', !!screen);
+    if (!screen) {
+      this.screen = screenFor(this.viewportWidth());
+      if (path) this.select(resolvePath(this.doc, path));
+      else this.renderPanel();
+      return;
+    }
+    this.screen = screen;
+    const frame = h('iframe', 'frame');
+    // Con este nombre el script, si el prototipo lo carga por su cuenta, no abre otro editor dentro.
+    // Tiene que ir antes de insertar el marco: después ya no cambia el nombre de su ventana.
+    frame.name = FRAME_NAME;
+    this.stage.appendChild(frame);
+    frame.title = `Página a ${screen.width} px`;
+    frame.style.width = `${screen.width}px`;
+    frame.addEventListener('load', () => {
+      const page = frame.contentDocument;
+      if (!page || frame !== this.iframe) return;
+      if (this.page !== this.doc) this.detachPage(this.page);
+      this.page = page;
+      this.attachPage(page);
+      this.selected = null;
+      this.collectAll();
+      if (path) { const el = resolvePath(page, path); if (el) this.select(el); }
+      this.renderPanel();
+    });
+    frame.src = this.doc.location.href;
+    this.iframe = frame;
+    this.stage.dataset.label = `${screen.label} · ${screen.width} px`;
+    this.renderPanel();
+  }
+
+  /** En el marco, la capa de contornos se coloca encima de él (sus coordenadas son las del marco). */
+  private placeOverlayRoot(): void {
+    const st = this.ovRoot.style;
+    if (!this.iframe || this.page === this.doc) { st.cssText = ''; return; }
+    const r = this.iframe.getBoundingClientRect();
+    st.cssText = `position:fixed;left:${r.left}px;top:${r.top}px;width:${r.width}px;height:${r.height}px;transform:translateZ(0);overflow:hidden;`;
   }
 
   /** CSS listo para copiar, con el valor anterior como comentario. */
@@ -219,14 +328,19 @@ export class Editor {
     this.renderPanel();
   }
 
+  /** Clave de la regla donde se guardan los cambios: el selector y, fuera de escritorio, su @media. */
   get selector(): string | null {
+    return this.selected ? ruleKey(selectorFor(this.selected, this.scope), this.screen) : null;
+  }
+
+  get cssSelector(): string | null {
     return this.selected ? selectorFor(this.selected, this.scope) : null;
   }
 
   // ---------- Overlay ----------
 
   private buildOverlay(): void {
-    const L = this.layer;
+    const L = this.ovRoot;
     const areas = {} as Record<Kind, Record<Side, HTMLElement>>;
     const zones = {} as Record<Kind, Record<Side, HTMLElement>>;
     for (const kind of ['margin', 'padding'] as Kind[]) {
@@ -254,7 +368,7 @@ export class Editor {
 
     this.ov = {
       hover: h('div', 'hover', L), hoverTag: h('div', 'hover-tag', L),
-      sel: h('div', 'sel', L), dims: h('div', 'dims', L), tip: h('div', 'tip', L),
+      sel: h('div', 'sel', L), dims: h('div', 'dims', L), tip: h('div', 'tip', this.layer),
       areas, zones, size, twins: [],
     };
     this.ov.tip.style.display = 'none';
@@ -267,6 +381,7 @@ export class Editor {
 
   private renderOverlay(): void {
     const ov = this.ov;
+    this.placeOverlayRoot();
     const showHover = this.active && this.hovered && this.hovered !== this.selected && !this.drag;
     if (showHover) {
       const r = this.hovered!.getBoundingClientRect();
@@ -318,7 +433,7 @@ export class Editor {
   /** Con ámbito "por clase", marca con línea discontinua el resto de elementos afectados. */
   private renderTwins(el: Element): void {
     const twins = this.scope === 'class' ? this.matches().filter((m) => m !== el).slice(0, 50) : [];
-    while (this.ov.twins.length < twins.length) this.ov.twins.push(h('div', 'twin', this.layer));
+    while (this.ov.twins.length < twins.length) this.ov.twins.push(h('div', 'twin', this.ovRoot));
     this.ov.twins.forEach((t, i) => {
       const m = twins[i];
       if (!m) return place(t, null);
@@ -339,9 +454,9 @@ export class Editor {
   }
 
   private matches(): Element[] {
-    const sel = this.selector;
+    const sel = this.cssSelector;
     if (!sel) return [];
-    try { return Array.from(this.doc.querySelectorAll(sel)); } catch { return []; }
+    try { return Array.from(this.page.querySelectorAll(sel)); } catch { return []; }
   }
 
   // ---------- Arrastre ----------
@@ -431,21 +546,32 @@ export class Editor {
   private setComparing(on: boolean): void {
     if (on && this.store.size === 0) return;
     this.comparing = on;
-    this.previewStyle.media = on ? 'not all' : '';
+    this.updatePreviews();
     this.layer.classList.toggle('comparing', on);
     if (on) this.hovered = null;
   }
 
+  private viewportWidth(): number {
+    if (this.frameScreen) return this.frameScreen.width;
+    return this.page.documentElement.clientWidth || this.page.defaultView?.innerWidth || 1280;
+  }
+
+  private onResize = () => {
+    if (this.frameScreen) return;
+    const screen = screenFor(this.viewportWidth());
+    if (screen !== this.screen) { this.screen = screen; this.renderPanel(); }
+  };
+
   private onMouseMove = (e: MouseEvent) => {
     if (!this.active || this.drag || this.comparing) return;
     const t = e.target as Element | null;
-    this.hovered = !t || this.isOwn(t) || t === this.doc.documentElement ? null : t;
+    this.hovered = !t || this.isOwn(t) || t === this.page.documentElement ? null : t;
   };
 
   private onClick = (e: MouseEvent) => {
     if (!this.active || this.comparing || this.isOwn(e.target)) return;
     const t = e.target as Element;
-    if (t === this.doc.documentElement) return;
+    if (t === this.page.documentElement) return;
     // Mientras se edita, un clic selecciona en vez de seguir enlaces o pulsar botones del prototipo.
     e.preventDefault();
     e.stopPropagation();
@@ -477,7 +603,7 @@ export class Editor {
   }
 
   private collectAll(): void {
-    const root = this.doc.body ?? this.doc.documentElement;
+    const root = this.page.body ?? this.page.documentElement;
     const ignore = (el: Element) => el === this.host;
     this.candidates = collectSpacingValues(root, ignore);
     this.fontSizes = collectFontSizes(root, ignore);
@@ -502,12 +628,14 @@ export class Editor {
   private buildPanel(): void {
     this.panel.innerHTML = `
       <div class="head">
-        <span class="title" title="${HELP}">CSS Workout</span>
+        <span class="title" data-part="title">CSS Workout</span>
         <div class="toggle" title="Mientras editas, los clics seleccionan elementos en vez de usar el prototipo">
           <button data-act="on">Editar</button><button data-act="off">Usar página</button>
         </div>
         <button class="icon" data-act="side" title="Mover el panel al otro lado">⇆</button>
         <button class="icon" data-act="min" title="Minimizar">—</button>
+        <div class="toggle screens" data-part="screens">${SCREENS.map((sc) =>
+          `<button data-act="screen" data-value="${sc.id}" title="${sc.media ? `Ver y editar la página a ${sc.width} px. Los cambios valen para ${sc.label.toLowerCase()} y tamaños menores.` : 'Editar la página en la ventana real. Los cambios valen para todos los tamaños.'}">${sc.label}${sc.media ? ` <span class="px">${sc.width}</span>` : ''}</button>`).join('')}</div>
       </div>
       <div class="body">
         <div class="selection" data-part="selection"></div>
@@ -535,11 +663,16 @@ export class Editor {
     switch (act) {
       case 'on': this.active = true; break;
       case 'off': this.active = false; this.hovered = null; break;
-      case 'side': this.panel.classList.toggle('left'); break;
+      case 'side': this.layer.classList.toggle('panel-left', this.panel.classList.toggle('left')); break;
+      case 'screen': {
+        const sc = SCREENS.find((x) => x.id === btn.dataset.value)!;
+        this.setFrameScreen(sc.media ? sc : null);
+        return;
+      }
       case 'min': this.panel.classList.toggle('min'); break;
       case 'parent': {
         const p = this.selected?.parentElement;
-        if (p && p !== this.doc.documentElement) this.select(p);
+        if (p && p !== this.page.documentElement) this.select(p);
         break;
       }
       case 'deselect': this.select(null); break;
@@ -699,6 +832,12 @@ export class Editor {
     const q = (s: string) => this.panel.querySelector(s) as HTMLElement;
     q('[data-act="on"]').classList.toggle('on', this.active);
     q('[data-act="off"]').classList.toggle('on', !this.active);
+    q('[data-part="title"]').title = `Editando a ${this.viewportWidth()} px: ${this.screen.media
+      ? `los cambios se guardan solo para ${this.screen.label.toLowerCase()} y tamaños menores (@media ${this.screen.media})`
+      : 'los cambios valen para todos los tamaños'}\n\n${HELP}`;
+    for (const b of Array.from(this.panel.querySelectorAll<HTMLElement>('[data-act="screen"]'))) {
+      b.classList.toggle('on', b.dataset.value === this.screen.id);
+    }
     this.renderSelectionPart(q('[data-part="selection"]'));
     this.renderChangesPart(q('[data-part="changes"]'));
   }
@@ -720,7 +859,7 @@ export class Editor {
     }
     const selector = this.selector!;
     const cls = classSelector(el);
-    const count = cls ? this.doc.querySelectorAll(cls).length : 0;
+    const count = cls ? this.page.querySelectorAll(cls).length : 0;
     const box = measure(el);
     const inline = box.display === 'inline';
     const input = (prop: string, value: number) =>
@@ -751,7 +890,7 @@ export class Editor {
       </div>
       <div class="tab">
       ${this.mode === 'text' ? this.textSection(el, selector) : this.mode === 'layout' ? this.layoutSection(el, selector) : this.boxSection(el, selector, box, inline, input)}
-      <div class="muted mono" title="Selector al que se aplicarán los cambios">${escapeHtml(selector)}</div>
+      <div class="muted mono" title="Selector al que se aplicarán los cambios">${escapeHtml(this.cssSelector!)}${this.screen.media ? ` · solo ${this.screen.label.toLowerCase()} y menores` : ''}</div>
       </div>`;
     part.querySelector('.tab')!.scrollTop = scroll;
   }
@@ -899,8 +1038,8 @@ export class Editor {
       ? '<div class="empty">Todavía no hay cambios.</div>'
       : `<div class="changes">${rows.map((r) => `
           <div class="change">
-            <span class="what" title="${escapeHtml(`${r.selector} { ${r.prop}: ${r.value} }`)}">
-              <code>${escapeHtml(r.selector)}</code> ${propLabel(r.prop)}: <span class="muted">${escapeHtml(r.original)} →</span> <b>${escapeHtml(r.value)}</b>
+            <span class="what" title="${escapeHtml(`${r.selector.replace('{', ' { ')} { ${r.prop}: ${r.value} }`)}">
+              ${screenTag(r.selector)}<code>${escapeHtml(parseKey(r.selector).selector)}</code> ${propLabel(r.prop)}: <span class="muted">${escapeHtml(r.original)} →</span> <b>${escapeHtml(r.value)}</b>
             </span>
             <button class="icon" data-act="remove" data-selector="${escapeHtml(r.selector)}" data-prop="${r.prop}" title="Quitar este cambio">✕</button>
           </div>`).join('')}</div>`;

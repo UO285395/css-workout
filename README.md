@@ -18,10 +18,11 @@ Pensado para gente que entiende qué es un margen o un relleno pero no escribe C
 
    Los valores numéricos se pueden escribir o ajustar arrastrando a izquierda o derecha sobre su nombre.
    **Hover**, junto a «↑ Padre», edita cómo se ve el elemento al pasar el ratón por encima: lo muestra en ese estado mientras ajustas y el CSS sale como `:hover`.
+   **🗑** (o la tecla `Supr`) elimina el elemento de la vista para ver cómo queda la página sin él. Solo se oculta mientras editas: no sale en el CSS copiado. Se deshace con `Ctrl+Z` o quitándolo de la lista de cambios.
 4. Elige si el cambio se aplica a **todos los elementos con esa clase** o **solo a ese**.
 5. Pulsa **Copiar CSS** y pégalo al final de la hoja de estilos del prototipo.
 
-Atajos: `Alt` arrastra sin imán; con un elemento seleccionado, `Alt` sobre otro mide la distancia hasta él (o hasta los bordes de su contenedor y de la ventana) · `Shift` va de 8 en 8 px · `Esc` suelta la selección · `Ctrl+Z` / `Ctrl+Shift+Z` deshacer y rehacer.
+Atajos: `Alt` arrastra sin imán; con un elemento seleccionado, `Alt` sobre otro mide la distancia hasta él (o hasta los bordes de su contenedor y de la ventana) · `Shift` va de 8 en 8 px · `Esc` suelta la selección · `Supr` elimina el elemento de la vista · `Ctrl+Z` / `Ctrl+Shift+Z` deshacer y rehacer.
 
 «Usar página» desactiva la selección para poder navegar el prototipo con normalidad.
 

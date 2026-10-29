@@ -153,14 +153,15 @@ export class ChangeStore {
    * CSS de los cambios. Con `important` se usa para la vista previa (gana a las reglas del
    * prototipo); sin él es el CSS que el usuario copia.
    */
-  toCss({ important = false, comments = false, mapSelector = (sel: string) => sel } = {}): string {
+  toCss({ important = false, comments = false, mapSelector = (sel: string) => sel, skip = (_prop: string, _value: string): boolean => false } = {}): string {
     // Primero las reglas para todos los tamaños y luego cada @media, del más ancho al más estrecho,
     // para que el tamaño más pequeño gane.
     const groups = new Map<Screen, string[]>();
     for (const [key, props] of this.rules) {
-      if (props.size === 0) continue;
+      const kept = Array.from(props).filter(([prop, e]) => !skip(prop, e.value));
+      if (kept.length === 0) continue;
       const { selector, screen } = parseKey(key);
-      const lines = Array.from(props, ([prop, e]) => {
+      const lines = kept.map(([prop, e]) => {
         const decl = `${prop}: ${e.value}${important ? ' !important' : ''};`;
         return comments && e.original ? `${decl} /* antes: ${e.original} */` : decl;
       });

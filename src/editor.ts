@@ -23,7 +23,7 @@ const BLOCK_ONLY = ['width', 'height', 'margin-top', 'margin-bottom'];
 export const needsInlineBlock = (display: string, props: readonly string[]) =>
   display === 'inline' && props.some((p) => BLOCK_ONLY.includes(p));
 const STORAGE_PREFIX = 'css-workout:';
-const HELP = 'Arrastra una etiqueta subrayada para cambiar su valor\nAlt sobre otro elemento: medir distancias\nArrastra con Alt: sin imán\nArrastra con Shift: de 8 en 8\nEsc: soltar la selección\nCtrl+Z / Ctrl+Shift+Z: deshacer y rehacer';
+const HELP = 'Arrastra una etiqueta subrayada para cambiar su valor\nAlt sobre otro elemento: medir distancias\nArrastra con Alt: sin imán\nArrastra con Shift: de 8 en 8\nEsc: soltar la selección\nSupr: eliminar el elemento\nCtrl+Z / Ctrl+Shift+Z: deshacer y rehacer';
 
 const SIDE_LABEL: Record<Side, string> = { top: 'superior', right: 'derecho', bottom: 'inferior', left: 'izquierdo' };
 const KIND_LABEL: Record<Kind, string> = { margin: 'Margen', padding: 'Relleno' };
@@ -105,6 +105,8 @@ function hoverRulesCopy(doc: Document): string {
 }
 /** Color de una variable en hexadecimal de 6 cifras, para compararlo con los de la página. */
 const toHex = (v: string) => (/^#[0-9a-f]{3}$/i.test(v) ? '#' + v.slice(1).split('').map((c) => c + c).join('') : rgbToHex(v)).toLowerCase();
+/** Elemento eliminado de la vista: se previsualiza pero no se copia. */
+const isRemoval = (prop: string, value: string) => prop === 'display' && value === 'none';
 const escapeHtml = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
 
 type Item = { prop: string; value: string; original: string };
@@ -395,9 +397,10 @@ export class Editor {
 
   /** CSS listo para copiar, con el valor anterior como comentario. */
   exportCss(): string {
-    const n = this.store.size;
+    // Los elementos eliminados solo se ocultan en la vista: no salen en el CSS copiado.
+    const n = this.store.rows().filter((r) => !isRemoval(r.prop, r.value)).length;
     if (n === 0) return '';
-    return `/* CSS Workout: ${n} ${n === 1 ? 'cambio' : 'cambios'} */\n${this.store.toCss({ comments: true })}\n`;
+    return `/* CSS Workout: ${n} ${n === 1 ? 'cambio' : 'cambios'} */\n${this.store.toCss({ comments: true, skip: isRemoval })}\n`;
   }
 
   select(el: Element | null): void {
@@ -745,6 +748,7 @@ export class Editor {
     }
     if (e.key === 'Escape' && this.selected) { this.select(null); e.preventDefault(); return; }
     if (!this.active || this.isTyping(e.target)) return;
+    if ((e.key === 'Delete' || e.key === 'Backspace') && this.selected && !mod) { e.preventDefault(); this.removeSelected(); return; }
     if (mod && e.key.toLowerCase() === 'z') {
       e.preventDefault();
       if (e.shiftKey) this.store.redo(); else this.store.undo();
@@ -845,6 +849,7 @@ export class Editor {
         break;
       }
       case 'deselect': this.select(null); break;
+      case 'remove-el': this.removeSelected(); return;
       case 'mode-spacing': this.mode = 'spacing'; break;
       case 'mode-size': this.mode = 'size'; break;
       case 'mode-text': this.mode = 'text'; break;
@@ -892,6 +897,19 @@ export class Editor {
     if (!Number.isFinite(v)) return;
     if (prop.startsWith('shadow-')) return this.commit('box-shadow', this.shadowWith(prop as ShadowPart, String(v)));
     this.commit(prop, `${v}px`);
+  }
+
+  /**
+   * Eliminar un elemento de la vista: `display: none` en su selector (con el alcance, la pantalla y el estado
+   * elegidos), que no sale en el CSS copiado. Después se selecciona su contenedor, porque lo eliminado ya no
+   * se puede señalar.
+   */
+  private removeSelected(): void {
+    const el = this.selected;
+    if (!el) return;
+    this.commit('display', 'none');
+    const p = el.parentElement;
+    this.select(p && p !== this.page.documentElement ? p : null);
   }
 
   /** Aplica un valor a la selección como un paso de deshacer. */
@@ -1116,6 +1134,7 @@ export class Editor {
         <span style="flex:1"></span>
         <button data-act="hover" class="${this.hoverState ? 'on-state' : ''}" aria-pressed="${this.hoverState}" title="Editar cómo se ve al pasar el ratón por encima (:hover)">Hover</button>
         <button data-act="parent" title="Seleccionar el contenedor">↑ Padre</button>
+        <button data-act="remove-el" title="Eliminar (Supr): lo oculta en la vista, sin incluirlo en el CSS copiado. Se deshace con Ctrl+Z" aria-label="Eliminar elemento">🗑</button>
         <button data-act="deselect" title="Soltar selección (Esc)">✕</button>
       </div>
       ${cls ? `<div class="row"><span class="muted">Aplicar a</span>
@@ -1425,7 +1444,7 @@ export class Editor {
       : `<div class="changes">${rows.map((r) => `
           <div class="change">
             <span class="what" title="${escapeHtml(`${r.selector.replace('{', ' { ')} { ${r.prop}: ${r.value} }`)}">
-              ${screenTag(r.selector)}<code>${escapeHtml(parseKey(r.selector).selector)}</code> ${propLabel(r.prop)}: <span class="muted">${escapeHtml(r.original)} →</span> <b>${escapeHtml(r.value)}</b>
+              ${screenTag(r.selector)}<code>${escapeHtml(parseKey(r.selector).selector)}</code> ${isRemoval(r.prop, r.value) ? '<b>eliminado</b> <span class="muted">(solo en la vista)</span>' : `${propLabel(r.prop)}: <span class="muted">${escapeHtml(r.original)} →</span> <b>${escapeHtml(r.value)}</b>`}
             </span>
             <button class="icon" data-act="remove" data-selector="${escapeHtml(r.selector)}" data-prop="${r.prop}" title="Quitar este cambio">✕</button>
           </div>`).join('')}</div>`;

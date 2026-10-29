@@ -498,3 +498,25 @@ test('los colores que ya usa la página aparecen como muestras', async ({ page }
   expect(await page.evaluate(() => window.cssWorkout!.exportCss())).toContain(`color: ${value};`);
   await expect(ui(page, `button.swatch.on[data-prop="color"]`)).toHaveAttribute('data-value', value);
 });
+
+test('eliminar un elemento lo oculta en la vista, sin copiarlo, selecciona su contenedor y se deshace', async ({ page }) => {
+  const cards = page.locator('.card');
+  await cards.nth(1).click({ position: { x: 6, y: 6 } });
+  await ui(page, 'button[data-act="scope-element"]').click();
+  await ui(page, 'button[data-act="remove-el"]').click();
+  await expect(cards.nth(1)).toBeHidden();
+  await expect(cards.nth(0)).toBeVisible();
+  await expect(ui(page, '.el-name')).toContainText('section.cards');
+  await expect(ui(page, '.changes')).toContainText('eliminado');
+  // Solo se oculta en la vista: el CSS copiado no lo incluye.
+  expect(await page.evaluate(() => window.cssWorkout!.exportCss())).toBe('');
+
+  await page.keyboard.press('Control+z');
+  await expect(cards.nth(1)).toBeVisible();
+
+  // Con la tecla Supr y para todos los de la clase. Esc suelta el contenedor, cuyas zonas tapan la tarjeta.
+  await page.keyboard.press('Escape');
+  await cards.nth(0).click({ position: { x: 6, y: 6 } });
+  await page.keyboard.press('Delete');
+  for (let i = 0; i < 3; i++) await expect(cards.nth(i)).toBeHidden();
+});

@@ -33,6 +33,15 @@ describe('ChangeStore', () => {
     expect(s.toCss({ important: true })).toContain('padding-top: 24px !important;');
   });
 
+  it('toCss puede dejar fuera declaraciones, y la regla entera si se queda vacía', () => {
+    const s = new ChangeStore();
+    s.set('.card', 'display', 'none', 'block');
+    s.set('.nav', 'display', 'none', 'flex');
+    s.set('.nav', 'gap', '8px', '0px');
+    const skip = (prop: string, value: string) => prop === 'display' && value === 'none';
+    expect(s.toCss({ skip })).toBe('.nav {\n  gap: 8px;\n}');
+  });
+
   it('un cambio nuevo vacía el rehacer', () => {
     const s = new ChangeStore();
     s.set('a', 'width', '10px', '0px');
